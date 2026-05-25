@@ -3,11 +3,12 @@ extends "res://scripts/world/LevelManager.gd"
 # _WORLD_SPAWN is inherited from LevelManager.
 const _GHOST_DIRECTOR := preload("res://scripts/world/GhostSpawnDirector.gd")
 
-const YUREI_SCENE  = preload("res://scenes/entities/YureiEntity.tscn")
-const ONRYO_SCENE  = preload("res://scenes/entities/OnryoEntity.tscn")
-const HANG_SCENE   = preload("res://scenes/entities/HangingSpirit.tscn")
-const NOTE_SCENE   = preload("res://scenes/interactables/CollectibleNote.tscn")
-const SHRINE_SCENE = preload("res://scenes/interactables/Shrine.tscn")
+const YUREI_SCENE   = preload("res://scenes/entities/YureiEntity.tscn")
+const ONRYO_SCENE   = preload("res://scenes/entities/OnryoEntity.tscn")
+const HANG_SCENE    = preload("res://scenes/entities/HangingSpirit.tscn")
+const CORPSE_SCENE  = preload("res://scenes/entities/HangingCorpse.tscn")
+const NOTE_SCENE    = preload("res://scenes/interactables/CollectibleNote.tscn")
+const SHRINE_SCENE  = preload("res://scenes/interactables/Shrine.tscn")
 
 func _ready() -> void:
 	level_ambient_key = "deep_forest"
@@ -79,6 +80,34 @@ func _ready() -> void:
 	onryo_sanity.ghost_id = 11; onryo_sanity.spawn_on_sanity = true
 	onryo_sanity.position = Vector3(-9, 0, -26)
 	add_child(onryo_sanity)
+
+	# ── Hanging corpse encounter ────────────────────────────────────────────
+	# Sayuri — a woman who hanged herself off the main trail. Reading her
+	# suicide note spawns her aggressive yurei; the player must put 28 m
+	# between themselves and the corpse for 3 s to survive. Placed off to
+	# the side of the path so the player has to deliberately wander to
+	# find it (or notice the soft glow of the note through the trees).
+	var corpse = CORPSE_SCENE.instantiate()
+	corpse.name = "Sayuri_HangingCorpse"
+	corpse.corpse_id = 0
+	corpse.hang_height = 4.5
+	corpse.position = Vector3(13, 0, -42)
+	add_child(corpse)
+	# Branch above the body — a thick tree limb the rope is tied to.
+	# Without this the rope appears to vanish into thin air at the top.
+	var branch = MeshInstance3D.new()
+	var bm = CylinderMesh.new()
+	bm.height = 3.8
+	bm.top_radius = 0.085
+	bm.bottom_radius = 0.10
+	branch.mesh = bm
+	branch.position = Vector3(13, 4.55, -42)
+	branch.rotation_degrees = Vector3(0, 0, 90)
+	var branch_mat = StandardMaterial3D.new()
+	branch_mat.albedo_color = Color(0.12, 0.08, 0.05)
+	branch_mat.roughness = 0.94
+	branch.material_override = branch_mat
+	add_child(branch)
 
 	var director = Node.new()
 	director.name = "GhostSpawnDirector"
