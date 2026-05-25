@@ -1,6 +1,7 @@
 extends "res://scripts/world/LevelManager.gd"
 
-const _WORLD_SPAWN := preload("res://scripts/world/WorldSpawnUtil.gd")
+# _WORLD_SPAWN is inherited from LevelManager — re-declaring it here is a
+# parse error in Godot 4 (constants cannot shadow parent class members).
 const _CAR_BUILDER := preload("res://scripts/world/JapaneseCompactCarBuilder.gd")
 const _LOT_PROPS := preload("res://scripts/world/ParkingLotProps.gd")
 

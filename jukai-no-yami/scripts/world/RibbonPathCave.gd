@@ -1,6 +1,6 @@
 extends "res://scripts/world/LevelManager.gd"
 
-const _WORLD_SPAWN := preload("res://scripts/world/WorldSpawnUtil.gd")
+# _WORLD_SPAWN is inherited from LevelManager.
 const _GHOST_DIRECTOR := preload("res://scripts/world/GhostSpawnDirector.gd")
 
 const YUREI_SCENE = preload("res://scenes/entities/YureiEntity.tscn")

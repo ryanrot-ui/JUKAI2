@@ -1,6 +1,6 @@
 extends "res://scripts/world/LevelManager.gd"
 
-const _WORLD_SPAWN := preload("res://scripts/world/WorldSpawnUtil.gd")
+# _WORLD_SPAWN is inherited from LevelManager.
 const _CAR_BUILDER := preload("res://scripts/world/JapaneseCompactCarBuilder.gd")
 const _LOT_PROPS := preload("res://scripts/world/ParkingLotProps.gd")
 const _GHOST_DIRECTOR := preload("res://scripts/world/GhostSpawnDirector.gd")
