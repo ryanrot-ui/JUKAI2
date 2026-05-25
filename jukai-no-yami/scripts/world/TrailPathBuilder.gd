@@ -9,7 +9,9 @@ const _PATH_MARKERS := preload("res://scripts/world/PathMarkerSpawner.gd")
 @export var path_center: Vector3 = Vector3.ZERO
 @export var stake_spacing: float = 7.0
 @export var lantern_every: int = 2
-@export var light_spacing: float = 14.0
+# Breadcrumb lights — sparser + dimmer than before so they don't paint
+# a regular grid of dots across the forest floor.
+@export var light_spacing: float = 22.0
 @export var rand_seed: int = 4242
 
 
@@ -33,6 +35,139 @@ func build() -> void:
 	_make_path_mesh(level_root, center, path_length, path_half_width * 2.0)
 	_spawn_path_markers(level_root, center)
 	_spawn_breadcrumb_lights(level_root, center, path_length, path_half_width)
+	# Dense roadside fill — without this the sides of the trail look empty
+	# in playtest. Generates short dark trunks, jagged rocks, dead branches,
+	# and clumps of underbrush along both edges of the trail.
+	_spawn_roadside_fill(level_root, center, path_length, path_half_width)
+
+
+# Roadside fill — keep the sides of the trail visually busy so the player
+# never sees "empty void" past the trail edge. Uses small geometric primitives
+# (dark cylinders, small boxes, narrow cones) at random positions in the band
+# right next to the trail.
+func _spawn_roadside_fill(level_root: Node3D, center: Vector3, length: float, hw: float) -> void:
+	var holder := Node3D.new()
+	holder.name = "RoadsideFill"
+	level_root.add_child(holder)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = rand_seed * 31 + 17
+
+	# Materials — all dark, matte. Cell-shaded look comes from the post-process.
+	var trunk_mat := StandardMaterial3D.new()
+	trunk_mat.albedo_color = Color(0.06, 0.05, 0.04)
+	trunk_mat.roughness = 1.0
+	var rock_mat := StandardMaterial3D.new()
+	rock_mat.albedo_color = Color(0.14, 0.13, 0.12)
+	rock_mat.roughness = 0.95
+	var branch_mat := StandardMaterial3D.new()
+	branch_mat.albedo_color = Color(0.08, 0.06, 0.05)
+	branch_mat.roughness = 1.0
+	var brush_mat := StandardMaterial3D.new()
+	brush_mat.albedo_color = Color(0.04, 0.06, 0.03)
+	brush_mat.roughness = 1.0
+
+	var z_near := center.z + length * 0.5
+	var z_far := center.z - length * 0.5
+	# Step along the trail; at each step, place props on BOTH sides.
+	var step := 1.6
+	var z := z_near
+	while z >= z_far:
+		for side: float in [-1.0, 1.0]:
+			# Skip if the player would walk through this position — keep the
+			# edge buffer = path_half_width + 0.4 m clear.
+			var base_x := side * (hw + rng.randf_range(0.4, 1.8))
+			var local_z := z + rng.randf_range(-0.8, 0.8)
+			# Roll for what to place: 50% trunk, 25% rock, 15% branch, 10% brush
+			var r := rng.randf()
+			if r < 0.50:
+				_place_trunk(holder, Vector3(base_x, 0.0, local_z), trunk_mat, rng)
+			elif r < 0.75:
+				_place_rock(holder, Vector3(base_x, 0.0, local_z), rock_mat, rng)
+			elif r < 0.90:
+				_place_branch(holder, Vector3(base_x, 0.0, local_z), branch_mat, rng)
+			else:
+				_place_brush(holder, Vector3(base_x, 0.0, local_z), brush_mat, rng)
+		z -= step
+
+
+func _place_trunk(parent: Node3D, pos: Vector3, mat: Material, rng: RandomNumberGenerator) -> void:
+	var height := rng.randf_range(2.6, 4.2)
+	var radius := rng.randf_range(0.10, 0.22)
+	var trunk := MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.top_radius = radius * 0.78
+	cm.bottom_radius = radius
+	cm.height = height
+	cm.radial_segments = 8
+	trunk.mesh = cm
+	trunk.position = pos + Vector3(0, height * 0.5, 0)
+	# Slight random lean so the row of trunks doesn't look like fence posts
+	trunk.rotation_degrees = Vector3(
+		rng.randf_range(-3.0, 3.0),
+		rng.randf_range(0.0, 360.0),
+		rng.randf_range(-3.0, 3.0))
+	trunk.material_override = mat
+	trunk.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(trunk)
+
+
+func _place_rock(parent: Node3D, pos: Vector3, mat: Material, rng: RandomNumberGenerator) -> void:
+	# Jagged angular rock — single box, randomly rotated to look chiselled
+	var rock := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	var s := rng.randf_range(0.18, 0.42)
+	bm.size = Vector3(s, s * rng.randf_range(0.5, 0.9), s * rng.randf_range(0.7, 1.2))
+	rock.mesh = bm
+	rock.position = pos + Vector3(0, bm.size.y * 0.5, 0)
+	rock.rotation_degrees = Vector3(
+		rng.randf_range(-25.0, 25.0),
+		rng.randf_range(0.0, 360.0),
+		rng.randf_range(-25.0, 25.0))
+	rock.material_override = mat
+	rock.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(rock)
+
+
+func _place_branch(parent: Node3D, pos: Vector3, mat: Material, rng: RandomNumberGenerator) -> void:
+	# Fallen branch — thin cylinder lying horizontal
+	var branch := MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.top_radius = 0.025
+	cm.bottom_radius = 0.04
+	cm.height = rng.randf_range(0.9, 1.8)
+	branch.mesh = cm
+	branch.rotation_degrees = Vector3(
+		90.0 + rng.randf_range(-12.0, 12.0),
+		rng.randf_range(0.0, 360.0),
+		rng.randf_range(-8.0, 8.0))
+	branch.position = pos + Vector3(0, 0.04, 0)
+	branch.material_override = mat
+	branch.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(branch)
+
+
+func _place_brush(parent: Node3D, pos: Vector3, mat: Material, rng: RandomNumberGenerator) -> void:
+	# Low jagged clump — a few small angled boxes for ground vegetation
+	var clump := Node3D.new()
+	clump.position = pos
+	clump.rotation_degrees.y = rng.randf_range(0.0, 360.0)
+	for i in 3:
+		var blade := MeshInstance3D.new()
+		var bm := BoxMesh.new()
+		bm.size = Vector3(0.05, rng.randf_range(0.18, 0.32), 0.05)
+		blade.mesh = bm
+		blade.position = Vector3(
+			rng.randf_range(-0.18, 0.18),
+			bm.size.y * 0.5,
+			rng.randf_range(-0.18, 0.18))
+		blade.rotation_degrees = Vector3(
+			rng.randf_range(-15.0, 15.0),
+			rng.randf_range(0.0, 360.0),
+			rng.randf_range(-15.0, 15.0))
+		blade.material_override = mat
+		blade.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		clump.add_child(blade)
+	parent.add_child(clump)
 
 
 func _spawn_path_markers(level_root: Node3D, center: Vector3) -> void:
@@ -84,7 +219,7 @@ func _spawn_breadcrumb_lights(level_root: Node3D, center: Vector3, length: float
 			var gl := OmniLight3D.new()
 			gl.position = Vector3(side * (hw * 0.35), 0.35, z)
 			gl.light_color = Color(0.82, 0.72, 0.48)
-			gl.light_energy = 0.55
+			gl.light_energy = 0.32
 			gl.omni_range = 8.0
 			gl.shadow_enabled = false
 			holder.add_child(gl)

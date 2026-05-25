@@ -105,8 +105,13 @@ func set_checkpoint(pos: Vector3) -> void:
 	_checkpoint = pos
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event.is_action_pressed("pause") and state == GameState.PLAYING:
-		toggle_pause()
+	# Escape works in BOTH directions: pause from PLAYING, resume from
+	# PAUSED. The previous version only allowed pause, which locked the
+	# player into the pause menu (the screenshots showed this — cursor
+	# captured AND state stuck on PAUSED with no way to dismiss).
+	if event.is_action_pressed("pause"):
+		if state == GameState.PLAYING or state == GameState.PAUSED:
+			toggle_pause()
 
 # ─── State Management ─────────────────────────────────────────────────────────
 

@@ -63,23 +63,29 @@ func _ready() -> void:
 # corpse visible at a distance through the trees and gives the area a
 # distinct "wrong" feeling without needing a unique shader.
 func _build_atmosphere() -> void:
-	# Cold blue light from above — like a single moonlit shaft picking out
-	# the body. Tightly ranged so it doesn't bleed into the surroundings.
-	var moonlight := OmniLight3D.new()
-	moonlight.position = Vector3(0, 3.6, 0)
-	moonlight.light_color = Color(0.50, 0.62, 0.85)
-	moonlight.light_energy = 1.85
-	moonlight.omni_range = 5.2
+	# A SMALL cold spotlight from directly above. The previous version
+	# used an OmniLight at energy 1.85 which combined with the bloom
+	# post-process turned the whole figure into a blown-out white pillar
+	# (visible in playtest screenshots). A tight SpotLight aimed down
+	# picks out the body without overexposing it.
+	var moonlight := SpotLight3D.new()
+	moonlight.position = Vector3(0, hang_height + 0.5, 0)
+	moonlight.rotation_degrees = Vector3(-90.0, 0.0, 0.0)
+	moonlight.light_color = Color(0.46, 0.58, 0.78)
+	moonlight.light_energy = 0.55
+	moonlight.spot_range = hang_height + 1.5
+	moonlight.spot_angle = 24.0
+	moonlight.spot_angle_attenuation = 1.2
 	moonlight.shadow_enabled = false
 	add_child(moonlight)
 
-	# Drifting dust motes — sparse upward float, just visible in the moonlight
+	# Drifting dust motes — sparse upward float
 	var dust := CPUParticles3D.new()
-	dust.amount = 22
+	dust.amount = 18
 	dust.lifetime = 6.5
 	dust.emitting = true
 	dust.emission_shape = CPUParticles3D.EMISSION_SHAPE_BOX
-	dust.emission_box_extents = Vector3(1.4, 1.6, 1.4)
+	dust.emission_box_extents = Vector3(1.0, 1.4, 1.0)
 	dust.position = Vector3(0, 1.4, 0)
 	dust.direction = Vector3(0, 1, 0)
 	dust.spread = 18.0
@@ -87,14 +93,14 @@ func _build_atmosphere() -> void:
 	dust.initial_velocity_max = 0.10
 	dust.gravity = Vector3(0, 0.0, 0)
 	dust.scale_amount_min = 0.4
-	dust.scale_amount_max = 1.1
+	dust.scale_amount_max = 1.0
 	var dust_mat := StandardMaterial3D.new()
-	dust_mat.albedo_color = Color(0.85, 0.90, 1.0, 0.28)
+	dust_mat.albedo_color = Color(0.78, 0.84, 0.96, 0.18)
 	dust_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	dust_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	dust_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 	var dust_mesh := QuadMesh.new()
-	dust_mesh.size = Vector2(0.04, 0.04)
+	dust_mesh.size = Vector2(0.03, 0.03)
 	dust_mesh.material = dust_mat
 	dust.mesh = dust_mesh
 	add_child(dust)
@@ -209,13 +215,18 @@ func _build_corpse() -> void:
 	# she becomes when the note is read shares this silhouette deliberately:
 	# "this corpse stood up and started walking".
 	var skin := StandardMaterial3D.new()
-	skin.albedo_color = Color(0.74, 0.70, 0.66)   # death pallor
-	skin.roughness = 0.92
-	skin.metallic_specular = 0.05
+	# Death pallor — darker than living skin so the corpse doesn't read as
+	# pure white under the moonlight + bloom (which is what was happening
+	# in playtest screenshots).
+	skin.albedo_color = Color(0.46, 0.44, 0.42)
+	skin.roughness = 0.96
+	skin.metallic_specular = 0.02
 
 	var kimono_mat := StandardMaterial3D.new()
-	kimono_mat.albedo_color = Color(0.72, 0.70, 0.66)   # soiled white
-	kimono_mat.roughness = 0.95
+	# Soiled, damp burial kimono — not bright white. Dampened to mid-grey
+	# so the cloth doesn't blow out the silhouette.
+	kimono_mat.albedo_color = Color(0.42, 0.42, 0.40)
+	kimono_mat.roughness = 0.97
 
 	var sash_mat := StandardMaterial3D.new()
 	sash_mat.albedo_color = Color(0.42, 0.10, 0.10)     # dark red obi

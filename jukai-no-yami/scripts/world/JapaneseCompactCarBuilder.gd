@@ -62,32 +62,61 @@ static func build(
 	_add_box(vis, Vector3(WIDTH * 0.56, 0.26, 0.06), Vector3(0, 0.54, 1.97), black)   # grille
 	_add_box(vis, Vector3(WIDTH * 0.36, 0.07, 0.04), Vector3(0, 0.38, 1.98), black)   # lower intake
 	for side: float in [-1.0, 1.0]:
-		# Headlight housing + lens
-		_add_box(vis, Vector3(0.34, 0.16, 0.10), Vector3(side * 0.55, 0.58, 1.87), plastic)
-		var lens := _add_box(vis, Vector3(0.28, 0.12, 0.05), Vector3(side * 0.55, 0.58, 1.94), chrome)
-		if headlights_on and lens is MeshInstance3D:
+		# Headlight housing — recessed into the front fender, dark plastic
+		_add_box(vis, Vector3(0.34, 0.16, 0.10), Vector3(side * 0.55, 0.58, 1.86), plastic)
+		# Inner divider (gives the housing a "two-pod" look)
+		_add_box(vis, Vector3(0.02, 0.12, 0.04), Vector3(side * 0.55, 0.58, 1.92), black)
+		# Lens sits INSIDE the housing (~1 cm proud) — small, not a flat slab
+		var lens_mi: MeshInstance3D = _add_box(vis, Vector3(0.24, 0.10, 0.025), Vector3(side * 0.55, 0.58, 1.93), chrome)
+		if headlights_on:
 			var em := StandardMaterial3D.new()
-			em.albedo_color = Color(0.95, 0.90, 0.74)
+			em.albedo_color = Color(0.92, 0.86, 0.66)
 			em.emission_enabled = true
-			em.emission = Color(1.0, 0.94, 0.76)
-			em.emission_energy_multiplier = 0.55
+			em.emission = Color(0.98, 0.90, 0.72)
+			# Was 0.55 — bloomed into a white blob in playtests. Cut to a
+			# subtle glow; the SpotLight beam below carries most of the punch.
+			em.emission_energy_multiplier = 0.18
 			em.roughness = 0.10
-			(lens as MeshInstance3D).material_override = em
+			lens_mi.material_override = em
+			# Small actual SpotLight forward — gives the lens shape on the asphalt
+			var beam := SpotLight3D.new()
+			beam.position = Vector3(side * 0.55, 0.58, 2.00)
+			beam.rotation_degrees = Vector3(-4.0, 0.0, 0.0)
+			beam.light_color = Color(0.98, 0.92, 0.74)
+			beam.light_energy = 1.4
+			beam.spot_range = 8.0
+			beam.spot_angle = 30.0
+			beam.spot_angle_attenuation = 1.0
+			beam.shadow_enabled = false
+			vis.add_child(beam)
 
 	# ── Rear fascia: bumper, tail lights, plate ──────────────────────────────
 	_add_box(vis, Vector3(WIDTH * 0.96, 0.22, 0.18), Vector3(0, 0.34, -1.92), plastic)
 	for side: float in [-1.0, 1.0]:
-		var tl := _add_box(vis, Vector3(0.30, 0.16, 0.05), Vector3(side * 0.58, 0.56, -1.95), plastic)
-		var tl_mat := StandardMaterial3D.new()
-		tl_mat.albedo_color = Color(0.55, 0.04, 0.04)
-		tl_mat.emission_enabled = true
-		tl_mat.emission = Color(0.9, 0.05, 0.04)
-		tl_mat.emission_energy_multiplier = 0.30 if abandoned else 0.12
-		tl_mat.roughness = 0.25
-		if tl is MeshInstance3D:
-			(tl as MeshInstance3D).material_override = tl_mat
-	_add_box(vis, Vector3(0.42, 0.12, 0.02), Vector3(0, 0.50, -1.97), chrome)
-	_add_box(vis, Vector3(0.36, 0.08, 0.015), Vector3(0, 0.50, -1.985), plastic)
+		# Tail-light housing (dark plastic surround). Recessed into the
+		# rear fender so the red lens reads as a real light, not a sticker.
+		_add_box(vis, Vector3(0.32, 0.18, 0.04), Vector3(side * 0.58, 0.56, -1.94), plastic)
+		# Chrome divider strip (gives the lens the "two-segment" look)
+		_add_box(vis, Vector3(0.02, 0.14, 0.025), Vector3(side * 0.58, 0.56, -1.96), chrome)
+		# Two smaller lens segments per side instead of one big red slab
+		for seg: float in [-1.0, 1.0]:
+			var seg_x: float = side * 0.58 + seg * 0.07
+			var tl: MeshInstance3D = _add_box(vis, Vector3(0.10, 0.12, 0.018), Vector3(seg_x, 0.56, -1.965), plastic)
+			var tl_mat := StandardMaterial3D.new()
+			tl_mat.albedo_color = Color(0.35, 0.03, 0.03)
+			tl_mat.emission_enabled = true
+			tl_mat.emission = Color(0.80, 0.04, 0.03)
+			# Was 0.30/0.12 — bloomed into solid red blocks in playtests.
+			# Dial to a faint persistent glow; matches real parked-car
+			# reflectors that catch ambient light without being switched on.
+			tl_mat.emission_energy_multiplier = 0.10 if abandoned else 0.04
+			tl_mat.roughness = 0.30
+			tl.material_override = tl_mat
+	# Reverse light / centre reflector (white box, no emission)
+	_add_box(vis, Vector3(0.10, 0.06, 0.02), Vector3(0, 0.46, -1.97), chrome)
+	# License plate
+	_add_box(vis, Vector3(0.42, 0.12, 0.02), Vector3(0, 0.34, -1.97), chrome)
+	_add_box(vis, Vector3(0.36, 0.08, 0.015), Vector3(0, 0.34, -1.985), plastic)
 
 	# ── Wheels — torus tires, axle along X ──────────────────────────────────
 	var wheel_y := WHEEL_RADIUS + 0.02

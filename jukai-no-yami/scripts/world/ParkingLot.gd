@@ -283,21 +283,36 @@ func _spawn_sign(pos: Vector3, yaw_deg: float = 0.0) -> void:
 	board_m.size = Vector3(1.30, 0.70, 0.05)
 	var board_mi := MeshInstance3D.new()
 	board_mi.mesh = board_m
+	# Weathered dark wood — was much brighter (0.55, 0.42, 0.22) which read
+	# as a "backlit billboard" under the lot lights in playtest screenshots.
+	# Now: stained, almost-black timber that absorbs the lot light instead
+	# of glowing under it. The painted text reads ABOVE the wood, not as
+	# white-and-orange illumination.
 	var board_mat := StandardMaterial3D.new()
-	board_mat.albedo_color = Color(0.55, 0.42, 0.22)
-	board_mat.roughness = 0.92
+	board_mat.albedo_color = Color(0.18, 0.13, 0.08)
+	board_mat.roughness = 0.98
+	board_mat.metallic_specular = 0.02
 	board_mi.material_override = board_mat
 	board_mi.position = Vector3(0, 2.15, 0)
 	sign_body.add_child(board_mi)
 
+	# Disable shadow casting on the board's front-face label so the text
+	# doesn't self-shadow itself into invisibility.
+	board_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+	# Painted text — off-white, slightly stained, NOT emissive.
+	# Removed the previous "modulate = bright cream" which made the text
+	# look like a TV screen. outline_modulate adds a subtle dark border
+	# so it reads against the dark wood without needing emission.
 	var warn := Label3D.new()
 	warn.text = "樹海への立入注意\nSuicide Forest — Enter at your own risk"
-	# Slight forward offset so the text reads ON the board face, not inside it
-	warn.position = Vector3(0.0, 0.0, 0.030)
+	warn.position = Vector3(0.0, 0.0, 0.032)
 	warn.pixel_size = 0.0028
 	warn.billboard = BaseMaterial3D.BILLBOARD_DISABLED
 	warn.font_size = 14
-	warn.modulate = Color(0.88, 0.80, 0.62)
+	warn.modulate = Color(0.78, 0.72, 0.58)
+	warn.outline_size = 4
+	warn.outline_modulate = Color(0.02, 0.02, 0.02, 0.85)
 	warn.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	warn.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	board_mi.add_child(warn)
