@@ -25,6 +25,9 @@ func _ready() -> void:
 	add_to_group("ghost")
 	add_to_group("onryo")
 
+	# Pass-through to the player (kill check uses distance, not collision).
+	collision_layer = 0
+
 	var cap = CapsuleShape3D.new()
 	cap.radius = 0.4
 	cap.height = 1.7

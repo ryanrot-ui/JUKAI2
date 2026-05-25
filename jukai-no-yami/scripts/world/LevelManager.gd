@@ -15,6 +15,10 @@ func _refresh_env() -> void:
 func _start_common() -> void:
 	GameManager.ensure_post_process()
 	AudioManager.play_ambient(level_ambient_key)
+	# Push the first ambient creepy sting 60-110s out so the player has time
+	# to orient before the horror starts. Without this the env-sound timer
+	# persists across scene swaps and fires within seconds of level load.
+	AudioManager.begin_level_ambience()
 	GameManager.state = GameManager.GameState.PLAYING
 	_add_rain_overlay()
 	_start_tension_controller()
@@ -46,26 +50,22 @@ func _make_path(center: Vector3, length: float, width: float = 4.5) -> void:
 	_make_guided_path_mesh(center, length, width)
 
 func _make_guided_path_mesh(center: Vector3, length: float, width: float) -> void:
-	var body = StaticBody3D.new()
-	body.position = center
-	var shape = BoxShape3D.new()
-	shape.size = Vector3(width, 0.08, length)
-	var col = CollisionShape3D.new()
-	col.shape = shape
-	body.add_child(col)
-	var bm = BoxMesh.new()
-	bm.size = Vector3(width, 0.08, length)
-	var mi = MeshInstance3D.new()
+	# Visual overlay only — _make_floor's static body handles collision at y=0.
+	# Giving the path its own raised box created a step the player had to climb.
+	var mi := MeshInstance3D.new()
+	mi.position = Vector3(center.x, center.y + 0.02, center.z)
+	var bm := BoxMesh.new()
+	bm.size = Vector3(width, 0.04, length)
 	mi.mesh = bm
-	var mat = StandardMaterial3D.new()
+	var mat := StandardMaterial3D.new()
 	mat.albedo_color = Color(0.38, 0.32, 0.22)
 	mat.roughness = 0.96
 	mat.emission_enabled = true
 	mat.emission = Color(0.12, 0.10, 0.06)
 	mat.emission_energy_multiplier = 0.48
 	mi.material_override = mat
-	body.add_child(mi)
-	add_child(body)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(mi)
 
 func _add_guided_trail(center: Vector3, length: float, half_width: float, trail_seed: int = 4242) -> void:
 	var trail := Node3D.new()
@@ -113,10 +113,12 @@ func _make_world_env(_top: Color, _horizon: Color, fog_color: Color, fog_density
 	env.background_mode = Environment.BG_COLOR
 	env.background_color = Color(0.0, 0.0, 0.0, 1.0)
 
-	# Horror night forest — dark but playable; flashlight + trail lanterns read clearly
+	# Horror night forest — dark but playable. Bumped from 0.28 to 0.42 so
+	# the trees and ghosts read against the night sky instead of being
+	# pure black silhouettes. Flashlight remains the dominant light source.
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.045, 0.055, 0.085)
-	env.ambient_light_energy = 0.28
+	env.ambient_light_color = Color(0.060, 0.070, 0.105)
+	env.ambient_light_energy = 0.42
 
 	env.fog_enabled = true
 	env.fog_light_color = fog_color

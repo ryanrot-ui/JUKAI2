@@ -102,7 +102,9 @@ func _process(_delta: float) -> void:
 		activate()
 
 func _build_body() -> void:
-	# Collision capsule
+	# Pass-through to the player (proximity-based, not collision-based).
+	collision_layer = 0
+
 	var cap = CapsuleShape3D.new()
 	cap.radius = 0.34
 	cap.height = 1.90

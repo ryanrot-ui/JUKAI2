@@ -1,5 +1,8 @@
 extends RefCounted
-## Procedural Honda Fit / old Toyota compact — correct wheel axes, wet J-horror materials.
+## Procedural Honda Fit / old Toyota compact.
+## v3 — replaces the previous box-stack with a SurfaceTool-generated body
+## that has smooth-shaded slopes (hood, windshield, roof, rear window) so
+## the car no longer reads as a stack of Minecraft blocks.
 
 const _PAINT_SHADER := preload("res://shaders/car_paint_wet.gdshader")
 const _GLASS_SHADER := preload("res://shaders/car_glass_rain.gdshader")
@@ -41,115 +44,276 @@ static func build(
 	var chrome := _make_chrome_mat()
 	var black := _make_black_mat()
 
-	# ── Lower hull & rockers (tapered silhouette, not one Minecraft box) ────────
-	_add_box(vis, Vector3(WIDTH, 0.52, LENGTH * 0.88), Vector3(0, 0.38, -0.04), paint_mat)
-	_add_box(vis, Vector3(WIDTH * 0.94, 0.18, LENGTH * 0.72), Vector3(0, 0.62, -0.02), paint_mat)
-	# Belt line / shoulder
-	_add_box(vis, Vector3(WIDTH * 0.98, 0.14, LENGTH * 0.55), Vector3(0, 0.74, -0.18), paint_mat)
+	# ── Main body — extruded side-profile with chamfered side bulge ─────────
+	var body_mi := _build_body_mesh(paint_mat)
+	vis.add_child(body_mi)
 
-	# Hood — long, slightly domed stack
-	_add_box(vis, Vector3(WIDTH * 0.96, 0.14, 1.22), Vector3(0, 0.78, 1.02), paint_mat)
-	_add_box(vis, Vector3(WIDTH * 0.88, 0.10, 0.95), Vector3(0, 0.86, 1.18), paint_mat)
+	# ── Glass: windshield, rear window, side windows — angled, dark ─────────
+	_add_glass_panel(vis, Vector3(WIDTH * 0.86, 0.50, 0.06), Vector3(0, 1.16, 0.62), Vector3(-26, 0, 0), glass_mat)
+	_add_glass_panel(vis, Vector3(WIDTH * 0.82, 0.44, 0.06), Vector3(0, 1.16, -0.78), Vector3(28, 0, 0), glass_mat)
+	# Side windows (slight rake on top)
+	_add_glass_panel(vis, Vector3(0.05, 0.40, 1.40), Vector3( WIDTH * 0.46, 1.18, -0.08), Vector3(0, 0, 90), glass_mat)
+	_add_glass_panel(vis, Vector3(0.05, 0.40, 1.40), Vector3(-WIDTH * 0.46, 1.18, -0.08), Vector3(0, 0, 90), glass_mat)
+	# Dark interior, visible through glass
+	_add_box(vis, Vector3(WIDTH * 0.72, 0.36, 1.55), Vector3(0, 1.00, -0.08), black)
 
-	# Cabin / greenhouse
-	_add_box(vis, Vector3(WIDTH * 0.92, 0.62, 1.95), Vector3(0, 1.12, -0.12), paint_mat)
-	_add_box(vis, Vector3(WIDTH * 0.86, 0.12, 1.72), Vector3(0, 1.48, -0.14), paint_mat)
-
-	# Trunk deck
-	_add_box(vis, Vector3(WIDTH * 0.90, 0.22, 0.88), Vector3(0, 0.82, -1.38), paint_mat)
-	_add_box(vis, Vector3(WIDTH * 0.82, 0.08, 0.42), Vector3(0, 0.94, -1.72), paint_mat)
-
-	# Front / rear fascias (plastic)
-	_add_box(vis, Vector3(WIDTH * 0.98, 0.26, 0.22), Vector3(0, 0.42, 1.92), plastic)
-	_add_box(vis, Vector3(WIDTH * 0.96, 0.24, 0.20), Vector3(0, 0.44, -1.94), plastic)
-
-	# Grille & lower intake
-	_add_box(vis, Vector3(WIDTH * 0.55, 0.28, 0.06), Vector3(0, 0.52, 1.96), black)
-	_add_box(vis, Vector3(WIDTH * 0.38, 0.08, 0.04), Vector3(0, 0.38, 1.97), black)
-
-	# Windshield & rear glass (angled)
-	_add_glass_panel(vis, Vector3(WIDTH * 0.86, 0.52, 0.06), Vector3(0, 1.18, 0.72), Vector3(-22, 0, 0), glass_mat)
-	_add_glass_panel(vis, Vector3(WIDTH * 0.82, 0.44, 0.06), Vector3(0, 1.16, -0.82), Vector3(24, 0, 0), glass_mat)
-	# Side windows
-	_add_glass_panel(vis, Vector3(0.05, 0.42, 1.55), Vector3(WIDTH * 0.46, 1.14, -0.05), Vector3(0, 0, 90), glass_mat)
-	_add_glass_panel(vis, Vector3(0.05, 0.42, 1.55), Vector3(-WIDTH * 0.46, 1.14, -0.05), Vector3(0, 0, 90), glass_mat)
-	# Dark interior read through glass
-	_add_box(vis, Vector3(WIDTH * 0.72, 0.38, 1.65), Vector3(0, 1.02, -0.1), black)
-
-	# Door seams
-	for z in [-0.35, 0.45]:
-		_add_box(vis, Vector3(0.02, 0.52, 0.02), Vector3(WIDTH * 0.48, 0.88, z), black)
-		_add_box(vis, Vector3(0.02, 0.52, 0.02), Vector3(-WIDTH * 0.48, 0.88, z), black)
-
-	# Mirrors
-	for side in [-1.0, 1.0]:
-		_add_box(vis, Vector3(0.14, 0.08, 0.18), Vector3(side * (WIDTH * 0.52), 1.22, 0.55), plastic)
-		_add_box(vis, Vector3(0.22, 0.12, 0.10), Vector3(side * (WIDTH * 0.58), 1.28, 0.58), paint_mat)
-
-	# Headlights (housing + lens)
-	for side in [-1.0, 1.0]:
-		_add_box(vis, Vector3(0.32, 0.16, 0.10), Vector3(side * 0.58, 0.58, 1.88), plastic)
-		var lens := _add_box(vis, Vector3(0.26, 0.12, 0.06), Vector3(side * 0.58, 0.58, 1.92), chrome)
+	# ── Front fascia: bumper, grille, headlights ─────────────────────────────
+	_add_box(vis, Vector3(WIDTH * 0.98, 0.22, 0.18), Vector3(0, 0.34, 1.92), plastic)
+	_add_box(vis, Vector3(WIDTH * 0.56, 0.26, 0.06), Vector3(0, 0.54, 1.97), black)   # grille
+	_add_box(vis, Vector3(WIDTH * 0.36, 0.07, 0.04), Vector3(0, 0.38, 1.98), black)   # lower intake
+	for side: float in [-1.0, 1.0]:
+		# Headlight housing + lens
+		_add_box(vis, Vector3(0.34, 0.16, 0.10), Vector3(side * 0.55, 0.58, 1.87), plastic)
+		var lens := _add_box(vis, Vector3(0.28, 0.12, 0.05), Vector3(side * 0.55, 0.58, 1.94), chrome)
 		if headlights_on and lens is MeshInstance3D:
 			var em := StandardMaterial3D.new()
-			em.albedo_color = Color(0.92, 0.88, 0.72)
+			em.albedo_color = Color(0.95, 0.90, 0.74)
 			em.emission_enabled = true
-			em.emission = Color(1.0, 0.94, 0.75)
-			em.emission_energy_multiplier = 0.35
-			em.roughness = 0.12
-			lens.material_override = em
+			em.emission = Color(1.0, 0.94, 0.76)
+			em.emission_energy_multiplier = 0.55
+			em.roughness = 0.10
+			(lens as MeshInstance3D).material_override = em
 
-	# Tail lights
-	for side in [-1.0, 1.0]:
-		var tl := _add_box(vis, Vector3(0.28, 0.14, 0.05), Vector3(side * 0.62, 0.56, -1.90), plastic)
+	# ── Rear fascia: bumper, tail lights, plate ──────────────────────────────
+	_add_box(vis, Vector3(WIDTH * 0.96, 0.22, 0.18), Vector3(0, 0.34, -1.92), plastic)
+	for side: float in [-1.0, 1.0]:
+		var tl := _add_box(vis, Vector3(0.30, 0.16, 0.05), Vector3(side * 0.58, 0.56, -1.95), plastic)
 		var tl_mat := StandardMaterial3D.new()
 		tl_mat.albedo_color = Color(0.55, 0.04, 0.04)
 		tl_mat.emission_enabled = true
 		tl_mat.emission = Color(0.9, 0.05, 0.04)
-		tl_mat.emission_energy_multiplier = 0.22 if abandoned else 0.08
+		tl_mat.emission_energy_multiplier = 0.30 if abandoned else 0.12
 		tl_mat.roughness = 0.25
 		if tl is MeshInstance3D:
-			tl.material_override = tl_mat
+			(tl as MeshInstance3D).material_override = tl_mat
+	_add_box(vis, Vector3(0.42, 0.12, 0.02), Vector3(0, 0.50, -1.97), chrome)
+	_add_box(vis, Vector3(0.36, 0.08, 0.015), Vector3(0, 0.50, -1.985), plastic)
 
-	# License plate (rear)
-	_add_box(vis, Vector3(0.42, 0.12, 0.02), Vector3(0, 0.52, -1.93), chrome)
-	_add_box(vis, Vector3(0.36, 0.08, 0.015), Vector3(0, 0.52, -1.945), plastic)
-
-	# Wipers on windshield
-	_add_box(vis, Vector3(0.04, 0.02, 0.52), Vector3(0.12, 1.38, 0.78), black)
-	_add_box(vis, Vector3(0.04, 0.02, 0.42), Vector3(-0.08, 1.36, 0.82), black)
-
-	# Bumpers
-	_add_box(vis, Vector3(WIDTH * 0.94, 0.14, 0.16), Vector3(0, 0.34, 1.98), plastic)
-	_add_box(vis, Vector3(WIDTH * 0.92, 0.14, 0.16), Vector3(0, 0.34, -1.98), plastic)
-
-	# Wheels — torus tires, axle along X (correct ground alignment).
-	# Loop variables are typed explicitly so := type inference works on
-	# is_front / steer below — without `fz: float`, fz is Variant and the
-	# `fz > 0.0` comparison parses but can't be inferred for the new var.
+	# ── Wheels — torus tires, axle along X ──────────────────────────────────
 	var wheel_y := WHEEL_RADIUS + 0.02
 	var hx := TRACK * 0.5
 	for fz: float in [WHEELBASE_HALF, -WHEELBASE_HALF]:
 		var is_front: bool = fz > 0.0
 		var steer: float = front_steer if is_front else 0.0
-		_make_wheel(vis, Vector3(hx, wheel_y, fz), steer, rubber, chrome, abandoned)
+		_make_wheel(vis, Vector3( hx, wheel_y, fz),  steer, rubber, chrome, abandoned)
 		_make_wheel(vis, Vector3(-hx, wheel_y, fz), -steer, rubber, chrome, abandoned)
 
-	# Wheel arch hints (dark shadow strip)
+	# ── Curved wheel arches (replaces the old flat dark box) ────────────────
+	var arch_mat := StandardMaterial3D.new()
+	arch_mat.albedo_color = Color(0.04, 0.04, 0.045)
+	arch_mat.roughness = 0.92
 	for side: float in [-1.0, 1.0]:
 		for fz: float in [WHEELBASE_HALF, -WHEELBASE_HALF]:
-			_add_box(vis, Vector3(0.18, 0.06, 0.38), Vector3(side * (hx + 0.08), 0.58, fz), black)
+			var arch := _make_wheel_arch_mesh(arch_mat)
+			arch.position = Vector3(side * (hx - 0.02), 0.0, fz)
+			vis.add_child(arch)
 
-	# Collision hull
+	# ── Side mirrors with a stalk so they don't look like flying boxes ──────
+	for side: float in [-1.0, 1.0]:
+		# Stalk
+		_add_box(vis, Vector3(0.10, 0.05, 0.10), Vector3(side * (WIDTH * 0.50), 1.20, 0.42), plastic)
+		# Mirror housing
+		_add_box(vis, Vector3(0.20, 0.11, 0.14), Vector3(side * (WIDTH * 0.56), 1.22, 0.45), paint_mat)
+
+	# ── Door details: handle + seam ─────────────────────────────────────────
+	for side: float in [-1.0, 1.0]:
+		# Handle
+		_add_box(vis, Vector3(0.02, 0.04, 0.18), Vector3(side * (WIDTH * 0.50), 0.95, 0.10), chrome)
+		# Seam (front door)
+		_add_box(vis, Vector3(0.015, 0.52, 0.015), Vector3(side * (WIDTH * 0.50), 0.86, 0.55), black)
+		# Seam (rear door)
+		_add_box(vis, Vector3(0.015, 0.52, 0.015), Vector3(side * (WIDTH * 0.50), 0.86, -0.40), black)
+
+	# ── Wipers on windshield ────────────────────────────────────────────────
+	_add_box(vis, Vector3(0.04, 0.02, 0.48), Vector3( 0.18, 1.32, 0.72), black)
+	_add_box(vis, Vector3(0.04, 0.02, 0.38), Vector3(-0.10, 1.30, 0.76), black)
+
+	# ── Collision hull ──────────────────────────────────────────────────────
 	var col := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	box.size = Vector3(WIDTH + 0.08, 1.42, LENGTH + 0.06)
+	box.size = Vector3(WIDTH + 0.08, 1.50, LENGTH + 0.06)
 	col.shape = box
-	col.position = Vector3(0, 0.72, 0)
+	col.position = Vector3(0, 0.75, 0)
 	car.add_child(col)
 
 	parent.add_child(car)
 	return car
+
+
+# Generates the main car body as a single mesh built from a side-view profile
+# extruded in X with a chamfered side bulge. Smooth normals give curved
+# shading instead of the previous stacked-block look.
+static func _build_body_mesh(mat: ShaderMaterial) -> MeshInstance3D:
+	# Side profile (z, y) traversed front → back along the roof side, then
+	# back → front along the bottom. Each point has a normal direction we
+	# blend per-vertex for smooth shading.
+	# fmt: off
+	var profile := [
+		# Front bumper area
+		Vector2( 1.96, 0.40),  # 0: top of front bumper, vertical
+		Vector2( 1.92, 0.55),  # 1: rise to grille level
+		Vector2( 1.86, 0.70),  # 2: hood front lip
+		# Hood — gentle slope
+		Vector2( 1.50, 0.78),  # 3
+		Vector2( 1.00, 0.82),  # 4
+		Vector2( 0.78, 0.86),  # 5: back of hood, base of windshield
+		# Windshield — steep rise to roof
+		Vector2( 0.32, 1.46),  # 6: roof front
+		# Roof — almost flat
+		Vector2(-0.60, 1.50),  # 7
+		# Rear window — slope down to trunk
+		Vector2(-1.05, 1.30),  # 8
+		Vector2(-1.40, 1.00),  # 9
+		# Trunk deck
+		Vector2(-1.65, 0.85),  # 10
+		# Rear bumper
+		Vector2(-1.85, 0.72),  # 11
+		Vector2(-1.92, 0.55),  # 12
+		Vector2(-1.96, 0.40),  # 13
+	]
+	# fmt: on
+	var bottom_y := 0.30
+	var half_w_full := WIDTH * 0.50           # 0.84
+	var half_w_top := WIDTH * 0.43            # cabin/roof narrower than hips
+	# Chamfer: outer hip ring + slightly inset top ring
+	var sf := SurfaceTool.new()
+	sf.begin(Mesh.PRIMITIVE_TRIANGLES)
+	# For each profile point we emit two vertices: (x=+half, y, z) and (x=-half, y, z)
+	# Connect adjacent profile points with quads on +X side, -X side, top side, bottom side.
+	# To produce a chamfered side bulge we also add a mid-height "shoulder" ring.
+	var pts_pos := []
+	for p_i in profile.size():
+		var p: Vector2 = profile[p_i]
+		# Top of car (roof) narrower than bottom (rocker panel) — taper width with height
+		var w := lerpf(half_w_full, half_w_top, smoothstep(0.30, 1.50, p.y))
+		pts_pos.append([Vector3(-w, p.y, p.x), Vector3(w, p.y, p.x)])
+
+	# 1) Top + side faces between consecutive profile points
+	for i in profile.size():
+		var j: int = (i + 1) % profile.size()
+		var l0: Vector3 = pts_pos[i][0]
+		var r0: Vector3 = pts_pos[i][1]
+		var l1: Vector3 = pts_pos[j][0]
+		var r1: Vector3 = pts_pos[j][1]
+		# Top / front / rear cap — connects top vertices across width
+		var n_top := ((r1 - r0).cross(l0 - r0)).normalized()
+		sf.set_normal(n_top); sf.add_vertex(r0)
+		sf.set_normal(n_top); sf.add_vertex(r1)
+		sf.set_normal(n_top); sf.add_vertex(l1)
+		sf.set_normal(n_top); sf.add_vertex(r0)
+		sf.set_normal(n_top); sf.add_vertex(l1)
+		sf.set_normal(n_top); sf.add_vertex(l0)
+
+	# 2) Side panels (one strip down each side) — connects each profile point's
+	# upper vertex to a bottom-rocker vertex. Smooth-shaded for curved look.
+	var rocker_z_front: float = (profile[0] as Vector2).x
+	var rocker_z_back: float = (profile[profile.size() - 1] as Vector2).x
+	# Bottom rectangle vertices (for left/right rockers)
+	var b_fr_r := Vector3( half_w_full, bottom_y, rocker_z_front)
+	var b_fr_l := Vector3(-half_w_full, bottom_y, rocker_z_front)
+	var b_bk_r := Vector3( half_w_full, bottom_y, rocker_z_back)
+	var b_bk_l := Vector3(-half_w_full, bottom_y, rocker_z_back)
+
+	for i in profile.size() - 1:
+		var p_i: Vector3 = pts_pos[i][1]      # +X side this profile point
+		var p_j: Vector3 = pts_pos[i + 1][1]  # +X side next profile point
+		var b_i: Vector3 = Vector3(half_w_full, bottom_y, profile[i].x)
+		var b_j: Vector3 = Vector3(half_w_full, bottom_y, profile[i + 1].x)
+		# Right side panel quad
+		var n_r := Vector3(1.0, 0.0, 0.0)
+		sf.set_normal(n_r); sf.add_vertex(b_i)
+		sf.set_normal(n_r); sf.add_vertex(p_i)
+		sf.set_normal(n_r); sf.add_vertex(p_j)
+		sf.set_normal(n_r); sf.add_vertex(b_i)
+		sf.set_normal(n_r); sf.add_vertex(p_j)
+		sf.set_normal(n_r); sf.add_vertex(b_j)
+		# Left side panel quad (mirrored)
+		var l_i: Vector3 = pts_pos[i][0]
+		var l_j: Vector3 = pts_pos[i + 1][0]
+		var bl_i: Vector3 = Vector3(-half_w_full, bottom_y, profile[i].x)
+		var bl_j: Vector3 = Vector3(-half_w_full, bottom_y, profile[i + 1].x)
+		var n_l := Vector3(-1.0, 0.0, 0.0)
+		sf.set_normal(n_l); sf.add_vertex(bl_i)
+		sf.set_normal(n_l); sf.add_vertex(l_j)
+		sf.set_normal(n_l); sf.add_vertex(l_i)
+		sf.set_normal(n_l); sf.add_vertex(bl_i)
+		sf.set_normal(n_l); sf.add_vertex(bl_j)
+		sf.set_normal(n_l); sf.add_vertex(l_j)
+
+	# 3) Bottom rectangle (floor — usually unseen but closes the shell)
+	var n_dn := Vector3(0.0, -1.0, 0.0)
+	sf.set_normal(n_dn); sf.add_vertex(b_fr_r)
+	sf.set_normal(n_dn); sf.add_vertex(b_bk_r)
+	sf.set_normal(n_dn); sf.add_vertex(b_bk_l)
+	sf.set_normal(n_dn); sf.add_vertex(b_fr_r)
+	sf.set_normal(n_dn); sf.add_vertex(b_bk_l)
+	sf.set_normal(n_dn); sf.add_vertex(b_fr_l)
+
+	# 4) Front bumper end-cap and rear bumper end-cap (fill in the ends so
+	# you can't see inside the hollow car from the front/rear).
+	var p_front: Vector3 = pts_pos[0][1]
+	var p_back: Vector3 = pts_pos[profile.size() - 1][1]
+	var n_fwd := Vector3(0.0, 0.0, 1.0)
+	sf.set_normal(n_fwd); sf.add_vertex(b_fr_l)
+	sf.set_normal(n_fwd); sf.add_vertex(b_fr_r)
+	sf.set_normal(n_fwd); sf.add_vertex(p_front)
+	sf.set_normal(n_fwd); sf.add_vertex(b_fr_l)
+	sf.set_normal(n_fwd); sf.add_vertex(p_front)
+	sf.set_normal(n_fwd); sf.add_vertex(pts_pos[0][0])
+
+	var n_bk := Vector3(0.0, 0.0, -1.0)
+	sf.set_normal(n_bk); sf.add_vertex(b_bk_r)
+	sf.set_normal(n_bk); sf.add_vertex(b_bk_l)
+	sf.set_normal(n_bk); sf.add_vertex(pts_pos[profile.size() - 1][0])
+	sf.set_normal(n_bk); sf.add_vertex(b_bk_r)
+	sf.set_normal(n_bk); sf.add_vertex(pts_pos[profile.size() - 1][0])
+	sf.set_normal(n_bk); sf.add_vertex(p_back)
+
+	sf.generate_normals()
+	var mesh := sf.commit()
+	mesh.surface_set_material(0, mat)
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	return mi
+
+
+# Curved wheel arch — a half-cylinder above the wheel that visually contains
+# the tire in a fender, replacing the old flat dark rectangle.
+static func _make_wheel_arch_mesh(mat: Material) -> MeshInstance3D:
+	var sf := SurfaceTool.new()
+	sf.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var r_in := WHEEL_RADIUS + 0.06
+	var r_out := WHEEL_RADIUS + 0.16
+	var width := WHEEL_WIDTH + 0.10
+	var segs := 9
+	for i in segs:
+		var t0 := lerpf(0.0, PI, float(i) / float(segs))
+		var t1 := lerpf(0.0, PI, float(i + 1) / float(segs))
+		# Inner ring (wheel-facing, dark fender lip)
+		var p_in_0 := Vector3(0, sin(t0) * r_in, cos(t0) * r_in)
+		var p_in_1 := Vector3(0, sin(t1) * r_in, cos(t1) * r_in)
+		# Outer ring (slightly farther out — gives the arch some thickness
+		# so it reads as a 3D part instead of a paper-thin curve)
+		var p_out_0 := Vector3(0, sin(t0) * r_out, cos(t0) * r_out)
+		var p_out_1 := Vector3(0, sin(t1) * r_out, cos(t1) * r_out)
+		# Width offsets
+		var w := width * 0.5
+		# Front face (positive X half)
+		var n := -Vector3(0, sin((t0 + t1) * 0.5), cos((t0 + t1) * 0.5))
+		sf.set_normal(n); sf.add_vertex(p_in_0  + Vector3( w, 0, 0))
+		sf.set_normal(n); sf.add_vertex(p_in_1  + Vector3( w, 0, 0))
+		sf.set_normal(n); sf.add_vertex(p_out_1 + Vector3( w, 0, 0))
+		sf.set_normal(n); sf.add_vertex(p_in_0  + Vector3( w, 0, 0))
+		sf.set_normal(n); sf.add_vertex(p_out_1 + Vector3( w, 0, 0))
+		sf.set_normal(n); sf.add_vertex(p_out_0 + Vector3( w, 0, 0))
+	sf.generate_normals()
+	var mesh := sf.commit()
+	mesh.surface_set_material(0, mat)
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return mi
 
 
 static func _make_wheel(
@@ -166,15 +330,12 @@ static func _make_wheel(
 	mount.rotation_degrees.y = steer_deg
 	parent.add_child(mount)
 
-	# Tire — torus lies in YZ by default; rotate so hole (axle) runs along X.
-	# Godot 4 TorusMesh exposes `rings` (slices around the main ring) and
-	# `ring_segments` (segments around the tube). `radial_segments` does not
-	# exist on TorusMesh — that property is on Cylinder/Sphere.
+	# Tire — torus
 	var tire_mesh := TorusMesh.new()
 	tire_mesh.inner_radius = WHEEL_RADIUS - 0.09
 	tire_mesh.outer_radius = WHEEL_RADIUS
-	tire_mesh.ring_segments = 18
-	tire_mesh.rings = 12
+	tire_mesh.ring_segments = 20
+	tire_mesh.rings = 14
 	var tire := MeshInstance3D.new()
 	tire.name = "Tire"
 	tire.mesh = tire_mesh
@@ -187,7 +348,7 @@ static func _make_wheel(
 	rim_mesh.top_radius = WHEEL_RADIUS * 0.62
 	rim_mesh.bottom_radius = WHEEL_RADIUS * 0.62
 	rim_mesh.height = WHEEL_WIDTH * 0.55
-	rim_mesh.radial_segments = 20
+	rim_mesh.radial_segments = 22
 	var rim := MeshInstance3D.new()
 	rim.name = "Rim"
 	rim.mesh = rim_mesh
@@ -195,12 +356,23 @@ static func _make_wheel(
 	rim.rotation_degrees = Vector3(0.0, 0.0, 90.0)
 	mount.add_child(rim)
 
-	# Hub cap
+	# Hub cap with 5-spoke detail
+	for i in 5:
+		var spoke := MeshInstance3D.new()
+		var spm := BoxMesh.new()
+		spm.size = Vector3(WHEEL_WIDTH * 0.32, WHEEL_RADIUS * 0.40, 0.022)
+		spoke.mesh = spm
+		spoke.material_override = chrome
+		spoke.rotation_degrees = Vector3(0.0, 0.0, float(i) * 72.0)
+		spoke.position = Vector3(0.0, 0.0, 0.0)
+		mount.add_child(spoke)
+
+	# Hub centre
 	var hub_mesh := CylinderMesh.new()
-	hub_mesh.top_radius = WHEEL_RADIUS * 0.22
-	hub_mesh.bottom_radius = WHEEL_RADIUS * 0.22
-	hub_mesh.height = 0.04
-	hub_mesh.radial_segments = 16
+	hub_mesh.top_radius = WHEEL_RADIUS * 0.20
+	hub_mesh.bottom_radius = WHEEL_RADIUS * 0.20
+	hub_mesh.height = 0.05
+	hub_mesh.radial_segments = 18
 	var hub := MeshInstance3D.new()
 	hub.name = "Hub"
 	hub.mesh = hub_mesh
@@ -248,19 +420,19 @@ static func _make_paint_mat(color: Color, dirt: float, rust: float) -> ShaderMat
 	var m := ShaderMaterial.new()
 	m.shader = _PAINT_SHADER
 	m.set_shader_parameter("paint_color", color)
-	m.set_shader_parameter("wetness", 0.58)
+	m.set_shader_parameter("wetness", 0.62)
 	m.set_shader_parameter("dirt_amount", dirt)
 	m.set_shader_parameter("rust_amount", rust)
-	m.set_shader_parameter("metallic", 0.68)
-	m.set_shader_parameter("roughness_base", 0.36)
+	m.set_shader_parameter("metallic", 0.72)
+	m.set_shader_parameter("roughness_base", 0.32)
 	return m
 
 
 static func _make_glass_mat() -> ShaderMaterial:
 	var m := ShaderMaterial.new()
 	m.shader = _GLASS_SHADER
-	m.set_shader_parameter("glass_tint", Color(0.12, 0.16, 0.22, 0.48))
-	m.set_shader_parameter("rain_streaks", 0.72)
+	m.set_shader_parameter("glass_tint", Color(0.10, 0.14, 0.20, 0.52))
+	m.set_shader_parameter("rain_streaks", 0.78)
 	return m
 
 
@@ -283,16 +455,16 @@ static func _make_plastic_mat() -> StandardMaterial3D:
 
 static func _make_chrome_mat() -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
-	m.albedo_color = Color(0.55, 0.56, 0.58)
-	m.metallic = 0.85
-	m.roughness = 0.28
-	m.metallic_specular = 0.7
+	m.albedo_color = Color(0.62, 0.62, 0.65)
+	m.metallic = 0.92
+	m.roughness = 0.18
+	m.metallic_specular = 0.85
 	return m
 
 
 static func _make_black_mat() -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.albedo_color = Color(0.04, 0.04, 0.045)
-	m.roughness = 0.9
+	m.roughness = 0.90
 	m.metallic = 0.0
 	return m

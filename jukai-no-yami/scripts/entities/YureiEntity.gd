@@ -25,6 +25,11 @@ func _ready() -> void:
 	add_to_group("ghost")
 	add_to_group("yurei")
 
+	# Ghosts are not solid — the player should pass straight through them
+	# (collision was creating "stand on the ghost's head" platforms). They
+	# still detect the ground for gravity by keeping collision_mask=1.
+	collision_layer = 0
+
 	var cap = CapsuleShape3D.new()
 	cap.radius = 0.35
 	cap.height = 1.6

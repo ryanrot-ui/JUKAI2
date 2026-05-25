@@ -18,8 +18,8 @@ func _ready() -> void:
 		Color(0.008, 0.006, 0.016),
 		Color(0.018, 0.014, 0.032),
 		Color(0.028, 0.020, 0.048),
-		0.032)
-	_make_directional_light(Color(0.10, 0.08, 0.16), 0.05)
+		0.025)
+	_make_directional_light(Color(0.16, 0.14, 0.22), 0.09)
 
 	_make_floor(Vector3(120, 0.4, 240))
 	_add_guided_trail(Vector3(0, 0.03, -50), 120, 2.4, 3334444)

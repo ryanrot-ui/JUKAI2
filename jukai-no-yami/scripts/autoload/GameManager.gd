@@ -254,7 +254,7 @@ func _tune_environment(env: Environment) -> void:
 	var eff = GraphicsQuality.LOW if performance_mode else graphics_quality
 	env.volumetric_fog_enabled = false
 	env.ssil_enabled = false
-	env.ambient_light_energy = maxf(env.ambient_light_energy, 0.24)
+	env.ambient_light_energy = maxf(env.ambient_light_energy, 0.36)
 	env.tonemap_exposure = 1.08
 	env.adjustment_brightness = 1.10
 	if performance_mode or eff == GraphicsQuality.LOW:

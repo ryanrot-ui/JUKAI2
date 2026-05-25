@@ -75,13 +75,24 @@ var _music_note_start: float = -999.0  # absolute _music_time when note fired
 var _music_next_note:  float = 2.0     # next trigger time
 
 # ── Environmental audio ───────────────────────────────────────────────────────
+# First-creepy-sound delay PER level. Without this the timer persists across
+# scene swaps (autoload outlives levels) and a creepy sting fires within
+# 1-2 seconds of entering a new area, which kills horror pacing.
+const ENV_FIRST_DELAY_MIN := 60.0
+const ENV_FIRST_DELAY_MAX := 110.0
 var _env_timer:    float = 0.0
-var _env_interval: float = 14.0
+var _env_interval: float = 75.0
 var _rng: RandomNumberGenerator = RandomNumberGenerator.new()
 
 const DRONE_RATE: float = 22050.0  # half rate — fine for sub-bass content
 const MUSIC_RATE: float = 22050.0
-const USE_PROCEDURAL_FALLBACK: bool = false  # real OGG assets only in-game
+const SYNTH_RATE: int = 22050
+# Override OGG files with synthesized streams. The shipped OGGs are tiny
+# (~4 KB) placeholders that sound metallic / "alien"; the procedural
+# synthesizer below produces voice-formant cries and breathy whispers that
+# read as ghostly. Set this to false if you drop real recorded OGGs in.
+const SYNTH_OVERRIDES_OGG: bool = true
+const USE_PROCEDURAL_FALLBACK: bool = true
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -89,6 +100,10 @@ func _ready() -> void:
 	_setup_players()
 	_preload_streams()
 	_setup_generators()
+	# Pre-cache synthesized AudioStreamWAV for every key. The cache is checked
+	# before load(), so this transparently substitutes for the placeholder OGGs.
+	if SYNTH_OVERRIDES_OGG:
+		_build_synth_cache()
 
 func _setup_generators() -> void:
 	# ── Binaural drone ─────────────────────────────────────────────────────────
@@ -320,6 +335,13 @@ func stop_crying(fade_time: float = 2.0) -> void:
 	await tween.finished
 	_cry_bus.stop()
 
+# Called by LevelManager._start_common when a new level starts playing.
+# Resets the env-sound timer so the first creepy sting is delayed by
+# ENV_FIRST_DELAY_MIN..MAX seconds instead of firing 1-2s into the level.
+func begin_level_ambience() -> void:
+	_env_timer = 0.0
+	_env_interval = _rng.randf_range(ENV_FIRST_DELAY_MIN, ENV_FIRST_DELAY_MAX)
+
 # ── Ambient ───────────────────────────────────────────────────────────────────
 
 func play_ambient(key: String, fade: float = 2.0) -> void:
@@ -496,3 +518,418 @@ func _make_beep_samples(freq: float, dur: float) -> PackedVector2Array:
 		var s = sin(TAU * freq * t) * env * 0.35
 		buf[i] = Vector2(s, s)
 	return buf
+
+# ─── Improved Procedural Audio (Voice-Formant Synthesis) ──────────────────────
+# These functions pre-generate AudioStreamWAVs at startup and inject them
+# into _stream_cache under the same path keys the OGG files use. Because
+# _cache() returns from the dictionary before hitting load(), the synth
+# audio transparently replaces the placeholder OGGs.
+#
+# The synthesis uses additive harmonics with formant-weighted amplitudes
+# to approximate vocal-tract resonance. It's NOT a real recorded voice —
+# but it reads as "ghost crying woman" instead of "computer beeping at you".
+
+func _build_synth_cache() -> void:
+	# SFX
+	_cache_wav(SFX_PATHS["footstep_wet_1"], _synth_footstep(0))
+	_cache_wav(SFX_PATHS["footstep_wet_2"], _synth_footstep(1))
+	_cache_wav(SFX_PATHS["footstep_wet_3"], _synth_footstep(2))
+	_cache_wav(SFX_PATHS["note_pickup"], _synth_pickup_chime())
+	_cache_wav(SFX_PATHS["shrine_charge"], _synth_shrine_charge())
+	_cache_wav(SFX_PATHS["flashlight_on"], _synth_click(0.045, true))
+	_cache_wav(SFX_PATHS["flashlight_off"], _synth_click(0.05, false))
+	_cache_wav(SFX_PATHS["battery_low"], _synth_battery_beep())
+	_cache_wav(SFX_PATHS["jumpscare_sting"], _synth_jumpscare_sting())
+	_cache_wav(SFX_PATHS["rope_creak"], _synth_rope_creak())
+	_cache_wav(SFX_PATHS["breath_fast"], _synth_panic_breath())
+	# Player monologue voices — we can't TTS, so a quiet inhale stand-in.
+	_cache_wav(SFX_PATHS["player_voice_0"], _synth_short_breath(0.5))
+	_cache_wav(SFX_PATHS["player_voice_1"], _synth_short_breath(0.6))
+	_cache_wav(SFX_PATHS["player_voice_2"], _synth_short_breath(0.7))
+	_cache_wav(SFX_PATHS["player_voice_3"], _synth_short_breath(0.8))
+
+	# Ghost audio
+	_cache_wav(GHOST_PATHS["whisper_jp_1"], _synth_whisper(0.9, 220.0))
+	_cache_wav(GHOST_PATHS["whisper_jp_2"], _synth_whisper(1.0, 245.0))
+	_cache_wav(GHOST_PATHS["whisper_jp_3"], _synth_whisper(0.8, 270.0))
+	_cache_wav(GHOST_PATHS["cry_distant"], _synth_voice_cry(2.4, 240.0, 0.85, 0.30))
+	_cache_wav(GHOST_PATHS["cry_closer"], _synth_voice_cry(2.0, 250.0, 0.65, 0.55))
+	_cache_wav(GHOST_PATHS["cry_clear"], _synth_voice_cry(1.7, 260.0, 0.40, 0.80))
+	_cache_wav(GHOST_PATHS["cry_intense"], _synth_cry_intense())
+	_cache_wav(GHOST_PATHS["hair_drag"], _synth_hair_drag())
+	_cache_wav(GHOST_PATHS["yurei_shriek"], _synth_shriek())
+	_cache_wav(GHOST_PATHS["onryo_growl"], _synth_growl())
+	_cache_wav(GHOST_PATHS["koto_sting"], _synth_koto_pluck(220.0))
+	# Aliases — code references these even when they share an OGG.
+	_cache_wav(GHOST_PATHS["stalker_roar"], _synth_growl())
+	_cache_wav(GHOST_PATHS["stalker_retreat"], _synth_hair_drag())
+
+func _cache_wav(path: String, samples: PackedVector2Array) -> void:
+	_stream_cache[path] = _wav_from_samples(samples)
+
+func _wav_from_samples(samples: PackedVector2Array) -> AudioStreamWAV:
+	var wav := AudioStreamWAV.new()
+	wav.format = AudioStreamWAV.FORMAT_16_BITS
+	wav.mix_rate = SYNTH_RATE
+	wav.stereo = true
+	var bytes := PackedByteArray()
+	bytes.resize(samples.size() * 4)
+	for i in samples.size():
+		var l := clampf(samples[i].x, -1.0, 1.0)
+		var lv := int(l * 32767.0)
+		bytes[i * 4]     =  lv        & 0xFF
+		bytes[i * 4 + 1] = (lv >> 8)  & 0xFF
+		var r := clampf(samples[i].y, -1.0, 1.0)
+		var rv := int(r * 32767.0)
+		bytes[i * 4 + 2] =  rv        & 0xFF
+		bytes[i * 4 + 3] = (rv >> 8)  & 0xFF
+	wav.data = bytes
+	return wav
+
+# ── Synth primitives ──────────────────────────────────────────────────────────
+
+# Voice-formant harmonic stack. F0 is the fundamental; harmonics 2..8 get
+# weights shaped to emphasize energy near 500 Hz (F1) and 1500 Hz (F2),
+# producing a vowel-like timbre instead of a pure sawtooth.
+func _voice_sample(f0: float, t: float) -> float:
+	var s := 0.0
+	for h in range(1, 9):
+		var freq := f0 * float(h)
+		# Formant-shaped amplitude. Peaks near 500 and 1500 Hz; rolloff at high freq.
+		var w_f1 := exp(-pow((freq - 500.0) / 380.0, 2.0))
+		var w_f2 := exp(-pow((freq - 1500.0) / 520.0, 2.0)) * 0.55
+		var roll := 1.0 / float(h)        # natural harmonic falloff
+		var amp := (w_f1 + w_f2 + roll * 0.18)
+		s += sin(TAU * freq * t) * amp
+	return s * 0.30
+
+# Sad female crying with sob shudder. Pitch wobbles, breath noise overlays.
+func _synth_voice_cry(duration: float, pitch_hz: float, breath: float, intensity: float) -> PackedVector2Array:
+	var n := int(SYNTH_RATE * duration)
+	var buf := PackedVector2Array()
+	buf.resize(n)
+	for i in n:
+		var t := float(i) / float(SYNTH_RATE)
+		var phase := t / duration
+		# 4.5 Hz vibrato + 1.2 Hz sob shudder
+		var vib := sin(TAU * 4.5 * t) * 0.022 + sin(TAU * 1.2 * t) * 0.055
+		var f0 := pitch_hz * (1.0 + vib) * (1.0 + 0.04 * (1.0 - phase))
+		var voiced := _voice_sample(f0, t)
+		var bn := (_rng.randf() * 2.0 - 1.0) * breath * 0.55
+		# Bell-shaped amplitude with sob amplitude wobble
+		var env := sin(PI * phase) * (0.82 + 0.18 * sin(TAU * 1.2 * t))
+		env *= 0.45 + 0.55 * intensity
+		var s := (voiced * 0.65 + bn * 0.35) * env
+		# Mild stereo width — left/right phase-shifted breath
+		var sl := voiced * 0.65 * env + (_rng.randf() * 2.0 - 1.0) * breath * 0.55 * env * 0.35
+		var sr := voiced * 0.65 * env + (_rng.randf() * 2.0 - 1.0) * breath * 0.55 * env * 0.35
+		buf[i] = Vector2(clampf(sl * 0.78, -1.0, 1.0), clampf(sr * 0.78, -1.0, 1.0))
+	return buf
+
+# Intense cry — two layered cries at slight pitch offset, more presence
+func _synth_cry_intense() -> PackedVector2Array:
+	var a := _synth_voice_cry(1.6, 270.0, 0.30, 1.0)
+	var b := _synth_voice_cry(1.6, 320.0, 0.30, 0.85)
+	var n: int = min(a.size(), b.size())
+	var buf := PackedVector2Array()
+	buf.resize(n)
+	for i in n:
+		buf[i] = Vector2(
+			clampf(a[i].x * 0.65 + b[i].x * 0.55, -1.0, 1.0),
+			clampf(a[i].y * 0.55 + b[i].y * 0.65, -1.0, 1.0))
+	return buf
+
+# Whisper — breathy fricative bursts that suggest spoken syllables.
+# Not real speech, but more "haa-suu-keh" than "electronic chirp".
+func _synth_whisper(duration: float, base_pitch: float) -> PackedVector2Array:
+	var n := int(SYNTH_RATE * duration)
+	var buf := PackedVector2Array()
+	buf.resize(n)
+	# 3-5 syllable bursts evenly spread; each has a quick noise transient
+	# and a brief voiced tail.
+	var syll_count := _rng.randi_range(3, 5)
+	var syll_dur := duration / float(syll_count)
+	for i in n:
+		var t := float(i) / float(SYNTH_RATE)
+		var syll_idx := int(t / syll_dur)
+		var syll_t := t - float(syll_idx) * syll_dur
+		var syll_phase := syll_t / syll_dur
+		# Syllable envelope: quick attack, fade out before next syllable
+		var env := exp(-syll_phase * 4.0) * smoothstep(0.0, 0.04, syll_phase) * 0.9
+		# Breath / fricative noise
+		var bn := (_rng.randf() * 2.0 - 1.0) * 0.85
+		# Faint voiced tail (lower freq than the noise)
+		var pf := base_pitch * (1.0 + 0.02 * sin(TAU * 3.0 * t))
+		var voiced := _voice_sample(pf, t) * 0.18
+		var s := (bn * 0.65 + voiced) * env
+		buf[i] = Vector2(s * 0.55, s * 0.50)
+	return buf
+
+# Yurei shriek — high-pitched female scream with descending swoop
+func _synth_shriek() -> PackedVector2Array:
+	var duration := 0.85
+	var n := int(SYNTH_RATE * duration)
+	var buf := PackedVector2Array()
+	buf.resize(n)
+	for i in n:
+		var t := float(i) / float(SYNTH_RATE)
+		var phase := t / duration
+		# Glide: 350 Hz → 900 Hz → 600 Hz (rise-and-fall)
+		var glide_factor := 0.0
+		if phase < 0.35:
+			glide_factor = phase / 0.35  # 0..1
+		else:
+			glide_factor = 1.0 - (phase - 0.35) / 0.65 * 0.4  # 1..0.6
+		var f0 := lerpf(350.0, 900.0, glide_factor)
+		var voiced := _voice_sample(f0, t)
+		# Screech overlay — high-frequency noise that follows the pitch
+		var screech_freq := f0 * 4.0 + (_rng.randf() * 200.0 - 100.0)
+		var screech := sin(TAU * screech_freq * t) * 0.18
+		var bn := (_rng.randf() * 2.0 - 1.0) * 0.25
+		# Sharp attack, slow fall
+		var env := 1.0
+		if phase < 0.05:
+			env = phase / 0.05
+		else:
+			env = pow(1.0 - phase, 1.2)
+		env *= 0.95
+		var s := (voiced * 0.7 + screech * 0.35 + bn * 0.25) * env
+		buf[i] = Vector2(clampf(s * 0.88, -1.0, 1.0), clampf(s * 0.95, -1.0, 1.0))
+	return buf
+
+# Onryo growl — sub-bass throat sound with slow modulation and grit
+func _synth_growl() -> PackedVector2Array:
+	var duration := 1.4
+	var n := int(SYNTH_RATE * duration)
+	var buf := PackedVector2Array()
+	buf.resize(n)
+	for i in n:
+		var t := float(i) / float(SYNTH_RATE)
+		var phase := t / duration
+		var f0 := 78.0 * (1.0 + 0.06 * sin(TAU * 2.2 * t))
+		# Stack low harmonics; emphasize 2nd and 3rd for chest resonance
+		var v := sin(TAU * f0 * t) * 0.5
+		v += sin(TAU * f0 * 2.0 * t) * 0.32
+		v += sin(TAU * f0 * 3.0 * t) * 0.18
+		v += sin(TAU * f0 * 5.0 * t) * 0.08
+		# Wavefold for grit
+		v = sin(v * 1.4) * 0.78
+		# Throat noise overlay
+		var bn := (_rng.randf() * 2.0 - 1.0) * 0.18
+		var env := smoothstep(0.0, 0.18, phase) * smoothstep(1.0, 0.55, phase) * 0.92
+		var s := (v + bn) * env
+		buf[i] = Vector2(clampf(s * 0.78, -1.0, 1.0), clampf(s * 0.78, -1.0, 1.0))
+	return buf
+
+# Hair-drag — high-frequency filtered noise that crawls slowly
+func _synth_hair_drag() -> PackedVector2Array:
+	var duration := 1.6
+	var n := int(SYNTH_RATE * duration)
+	var buf := PackedVector2Array()
+	buf.resize(n)
+	var lp_l := 0.0
+	var lp_r := 0.0
+	for i in n:
+		var t := float(i) / float(SYNTH_RATE)
+		var phase := t / duration
+		# Brown-noise-like via low-passed white noise
+		var wl := _rng.randf() * 2.0 - 1.0
+		var wr := _rng.randf() * 2.0 - 1.0
+		lp_l = lp_l * 0.85 + wl * 0.15
+		lp_r = lp_r * 0.85 + wr * 0.15
+		# Slow tremolo
+		var tremolo := 0.55 + 0.45 * sin(TAU * 0.8 * t)
+		var env := smoothstep(0.0, 0.12, phase) * smoothstep(1.0, 0.7, phase)
+		buf[i] = Vector2(lp_l * 0.85 * tremolo * env, lp_r * 0.85 * tremolo * env)
+	return buf
+
+# Koto pluck — plucked-string-like emotive sound
+func _synth_koto_pluck(freq: float) -> PackedVector2Array:
+	var duration := 1.6
+	var n := int(SYNTH_RATE * duration)
+	var buf := PackedVector2Array()
+	buf.resize(n)
+	for i in n:
+		var t := float(i) / float(SYNTH_RATE)
+		# Slight downward bend over time (eerie / out-of-tune)
+		var bend := 1.0 - 0.04 * t
+		var f := freq * bend
+		# Karplus-strong-ish: harmonic stack + quick decay
+		var s := sin(TAU * f * t) * 0.55
+		s += sin(TAU * f * 2.0 * t) * 0.28 * exp(-t * 2.5)
+		s += sin(TAU * f * 3.0 * t) * 0.16 * exp(-t * 3.5)
+		s += sin(TAU * f * 4.0 * t) * 0.08 * exp(-t * 4.5)
+		# Pluck attack: noise burst at t=0
+		if t < 0.02:
+			s += (_rng.randf() * 2.0 - 1.0) * 0.5 * (1.0 - t / 0.02)
+		var env := exp(-t * 1.6)
+		var out := s * env * 0.78
+		buf[i] = Vector2(out * 0.95, out * 0.92)
+	return buf
+
+# Rope creak — low pitched whine with wood-like timbre
+func _synth_rope_creak() -> PackedVector2Array:
+	var duration := 0.95
+	var n := int(SYNTH_RATE * duration)
+	var buf := PackedVector2Array()
+	buf.resize(n)
+	for i in n:
+		var t := float(i) / float(SYNTH_RATE)
+		var phase := t / duration
+		# Glide from 140 → 210 Hz
+		var f := lerpf(140.0, 210.0, phase)
+		var s := sin(TAU * f * t) * 0.55
+		s += sin(TAU * f * 1.5 * t) * 0.28
+		s += sin(TAU * f * 2.0 * t) * 0.18
+		s += sin(TAU * f * 3.0 * t) * 0.08
+		# Slow random amplitude flutter — wood under stress
+		var flutter := 1.0 + 0.18 * sin(TAU * 12.0 * t + sin(TAU * 3.0 * t))
+		var env := sin(PI * phase) * 0.85 * flutter
+		var out := s * env * 0.7
+		buf[i] = Vector2(clampf(out, -1.0, 1.0), clampf(out * 0.94, -1.0, 1.0))
+	return buf
+
+# Panic / fast breath — quick in/out pattern
+func _synth_panic_breath() -> PackedVector2Array:
+	var duration := 0.85
+	var n := int(SYNTH_RATE * duration)
+	var buf := PackedVector2Array()
+	buf.resize(n)
+	for i in n:
+		var t := float(i) / float(SYNTH_RATE)
+		var phase := t / duration
+		# Two in-out cycles
+		var cycle := sin(TAU * 2.2 * t)
+		var env := smoothstep(0.0, 0.05, phase) * smoothstep(1.0, 0.85, phase)
+		var noise := (_rng.randf() * 2.0 - 1.0) * 0.9
+		# High-passed (subtract slow component)
+		var s := noise - noise * 0.4
+		s *= abs(cycle) * env * 0.55
+		buf[i] = Vector2(s * 0.78, s * 0.85)
+	return buf
+
+# Single soft inhale — stand-in for the missing recorded player voiceovers.
+func _synth_short_breath(duration: float) -> PackedVector2Array:
+	var n := int(SYNTH_RATE * duration)
+	var buf := PackedVector2Array()
+	buf.resize(n)
+	for i in n:
+		var t := float(i) / float(SYNTH_RATE)
+		var phase := t / duration
+		var env := smoothstep(0.0, 0.25, phase) * smoothstep(1.0, 0.7, phase)
+		var noise := (_rng.randf() * 2.0 - 1.0) * 0.55
+		buf[i] = Vector2(noise * env * 0.42, noise * env * 0.42)
+	return buf
+
+# Wet footstep with material variation 0..2
+func _synth_footstep(variant: int) -> PackedVector2Array:
+	var duration := 0.12
+	var n := int(SYNTH_RATE * duration)
+	var buf := PackedVector2Array()
+	buf.resize(n)
+	var thud_freq := 70.0 + float(variant) * 8.0
+	for i in n:
+		var t := float(i) / float(SYNTH_RATE)
+		var phase := t / duration
+		var thud := sin(TAU * thud_freq * t) * exp(-t * 35.0) * 0.55
+		# Scuff transient (high freq noise burst at start)
+		var scuff := 0.0
+		if t < 0.04:
+			scuff = (_rng.randf() * 2.0 - 1.0) * (1.0 - t / 0.04) * 0.45
+		# Wet splash high-pass tap
+		var splash := 0.0
+		if t > 0.02 and t < 0.07:
+			splash = (_rng.randf() * 2.0 - 1.0) * 0.20 * exp(-(t - 0.02) * 30.0)
+		var s := (thud + scuff + splash) * (0.9 - phase * 0.5)
+		buf[i] = Vector2(s * 0.92, s * 0.95)
+	return buf
+
+# Gentle pickup chime — two soft sine tones a fifth apart
+func _synth_pickup_chime() -> PackedVector2Array:
+	var duration := 0.55
+	var n := int(SYNTH_RATE * duration)
+	var buf := PackedVector2Array()
+	buf.resize(n)
+	for i in n:
+		var t := float(i) / float(SYNTH_RATE)
+		var phase := t / duration
+		var a := sin(TAU * 660.0 * t) * 0.32 * exp(-t * 4.0)
+		var b := sin(TAU * 990.0 * t) * 0.28 * exp(-t * 4.5)
+		var env := smoothstep(0.0, 0.02, phase) * smoothstep(1.0, 0.6, phase)
+		var s := (a + b) * env
+		buf[i] = Vector2(s, s * 0.92)
+	return buf
+
+# Shrine charge — soothing rising hum + soft chime
+func _synth_shrine_charge() -> PackedVector2Array:
+	var duration := 1.5
+	var n := int(SYNTH_RATE * duration)
+	var buf := PackedVector2Array()
+	buf.resize(n)
+	for i in n:
+		var t := float(i) / float(SYNTH_RATE)
+		var phase := t / duration
+		var f := lerpf(180.0, 220.0, phase)
+		var hum := sin(TAU * f * t) * 0.30 + sin(TAU * f * 2.0 * t) * 0.18
+		var bell := sin(TAU * 880.0 * t) * 0.18 * exp(-(phase - 0.3) * 2.5)
+		if phase < 0.3:
+			bell = 0.0
+		var env := smoothstep(0.0, 0.18, phase) * smoothstep(1.0, 0.7, phase)
+		var s := (hum + bell) * env * 0.55
+		buf[i] = Vector2(s, s * 0.95)
+	return buf
+
+# Click sounds for flashlight on/off — short noise burst
+func _synth_click(duration: float, brighter: bool) -> PackedVector2Array:
+	var n := int(SYNTH_RATE * duration)
+	var buf := PackedVector2Array()
+	buf.resize(n)
+	var center_freq := 2200.0 if brighter else 1100.0
+	for i in n:
+		var t := float(i) / float(SYNTH_RATE)
+		var phase := t / duration
+		var noise := (_rng.randf() * 2.0 - 1.0)
+		var pitch := sin(TAU * center_freq * t) * exp(-t * 80.0)
+		var s := (noise * 0.45 + pitch * 0.55) * exp(-t * 60.0) * 0.55
+		buf[i] = Vector2(s, s)
+	return buf
+
+# Battery-low beep — classic 880 Hz tone
+func _synth_battery_beep() -> PackedVector2Array:
+	var duration := 0.15
+	var n := int(SYNTH_RATE * duration)
+	var buf := PackedVector2Array()
+	buf.resize(n)
+	for i in n:
+		var t := float(i) / float(SYNTH_RATE)
+		var s := sin(TAU * 880.0 * t) * exp(-t * 12.0) * 0.40
+		buf[i] = Vector2(s, s)
+	return buf
+
+# Jumpscare sting — sub rumble + high screech together, sharp attack
+func _synth_jumpscare_sting() -> PackedVector2Array:
+	var duration := 0.95
+	var n := int(SYNTH_RATE * duration)
+	var buf := PackedVector2Array()
+	buf.resize(n)
+	for i in n:
+		var t := float(i) / float(SYNTH_RATE)
+		var phase := t / duration
+		# Sub rumble (50 Hz fundamental)
+		var rumble := sin(TAU * 50.0 * t) * 0.55
+		rumble += sin(TAU * 75.0 * t) * 0.25
+		# High screech with bend
+		var screech_f := 1800.0 - t * 600.0
+		var screech := sin(TAU * screech_f * t) * 0.30
+		# Noise impact
+		var noise := (_rng.randf() * 2.0 - 1.0) * 0.30 * exp(-t * 9.0)
+		# Attack envelope
+		var env := 1.0
+		if phase < 0.02:
+			env = phase / 0.02
+		else:
+			env = exp(-(phase - 0.02) * 3.5)
+		var s := (rumble + screech + noise) * env * 0.85
+		buf[i] = Vector2(clampf(s * 0.95, -1.0, 1.0), clampf(s, -1.0, 1.0))
+	return buf
+

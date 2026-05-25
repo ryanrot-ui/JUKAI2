@@ -49,17 +49,15 @@ func _spawn_path_markers(level_root: Node3D, center: Vector3) -> void:
 
 
 func _make_path_mesh(parent: Node3D, center: Vector3, length: float, width: float) -> void:
-	var body := StaticBody3D.new()
-	body.name = "GuidedTrailPath"
-	body.position = center
-	var shape := BoxShape3D.new()
-	shape.size = Vector3(width, 0.08, length)
-	var col := CollisionShape3D.new()
-	col.shape = shape
-	body.add_child(col)
-	var bm := BoxMesh.new()
-	bm.size = Vector3(width, 0.08, length)
+	# Path is a VISUAL overlay only. The forest floor under it provides
+	# collision at y=0, so the player walks on a continuous surface instead
+	# of stepping up onto a 7 cm raised box. A thin mesh sitting 2-4 cm
+	# above the floor reads clearly without creating a tripping edge.
 	var mi := MeshInstance3D.new()
+	mi.name = "GuidedTrailPath"
+	mi.position = Vector3(center.x, center.y + 0.02, center.z)
+	var bm := BoxMesh.new()
+	bm.size = Vector3(width, 0.04, length)
 	mi.mesh = bm
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = Color(0.38, 0.32, 0.22)
@@ -68,8 +66,8 @@ func _make_path_mesh(parent: Node3D, center: Vector3, length: float, width: floa
 	mat.emission = Color(0.12, 0.10, 0.06)
 	mat.emission_energy_multiplier = 0.35
 	mi.material_override = mat
-	body.add_child(mi)
-	parent.add_child(body)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(mi)
 
 
 func _spawn_breadcrumb_lights(level_root: Node3D, center: Vector3, length: float, hw: float) -> void:
