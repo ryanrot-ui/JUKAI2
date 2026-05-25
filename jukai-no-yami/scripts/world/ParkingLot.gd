@@ -185,29 +185,52 @@ func _spawn_lot_light(pos: Vector3) -> void:
 
 	add_child(pole)
 
-# Torii-style gate. Posts on each side, top beam, second beam, shimenawa rope,
-# and shide (paper streamers) that actually HANG DOWN from the top beam.
+# Torii-style gate. Cylinder pillars tilted 5° inward (authentic profile),
+# raycast-snapped to the ground so it never floats, custom unlit torii
+# shader for the flat sharp colour look. Two crossbeams + shimenawa rope
+# with hanging shide streamers.
 func _spawn_gate(pos: Vector3) -> void:
 	var gate := StaticBody3D.new()
+	# Ground-snap via raycast. Defer one frame so the floor StaticBody is in
+	# the physics space before we query it. Falls back to pos.y if the
+	# raycast misses (e.g. spawned outside the floor extent).
 	gate.position = pos
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.15, 0.09, 0.05)
-	mat.roughness = 0.94
+	add_child(gate)
+	call_deferred("_snap_to_ground", gate, pos)
 
-	# Vertical posts (4 m tall)
+	# Torii wood material — unlit dark vermilion with grain flicker
+	var torii_mat := ShaderMaterial.new()
+	torii_mat.shader = load("res://shaders/torii_gate.gdshader")
+	torii_mat.set_shader_parameter("wood_color", Color(0.18, 0.07, 0.05, 1.0))
+	torii_mat.set_shader_parameter("grain_color", Color(0.42, 0.12, 0.08, 1.0))
+	torii_mat.set_shader_parameter("grain_strength", 0.32)
+	torii_mat.set_shader_parameter("flicker_speed", 1.4)
+	torii_mat.set_shader_parameter("flicker_amount", 0.06)
+
+	# Vertical cylinder pillars — 4 m tall, leaning 5° toward each other.
+	# Tilt direction = sign convention: right post (x=+2.8) tilts left
+	# (rotation.z = +5 in Godot's left-handed Y-up means top goes -X).
 	for side: float in [-1.0, 1.0]:
-		var pm := BoxMesh.new()
-		pm.size = Vector3(0.24, 4.0, 0.24)
-		var pi := MeshInstance3D.new()
-		pi.mesh = pm; pi.material_override = mat
-		pi.position = Vector3(side * 2.8, 2.0, 0)
-		gate.add_child(pi)
+		var pillar := MeshInstance3D.new()
+		var pm := CylinderMesh.new()
+		pm.height = 4.0
+		pm.top_radius = 0.12
+		pm.bottom_radius = 0.16
+		pm.radial_segments = 18
+		pillar.mesh = pm
+		pillar.material_override = torii_mat
+		# Base at y=0, centre at y=2.0. Tilt by 5° toward the centre — for
+		# the right pillar (side=+1) we want its top to slide LEFT, which
+		# in Godot 3D means negative rotation about Z.
+		pillar.position = Vector3(side * 2.8, 2.0, 0)
+		pillar.rotation_degrees = Vector3(0.0, 0.0, -side * 5.0)
+		gate.add_child(pillar)
 
 	# Top beam — kasagi (slight outward overhang)
 	var tb := BoxMesh.new()
 	tb.size = Vector3(6.6, 0.26, 0.28)
 	var tbi := MeshInstance3D.new()
-	tbi.mesh = tb; tbi.material_override = mat
+	tbi.mesh = tb; tbi.material_override = torii_mat
 	tbi.position = Vector3(0, 4.0, 0)
 	gate.add_child(tbi)
 
@@ -215,11 +238,11 @@ func _spawn_gate(pos: Vector3) -> void:
 	var lb := BoxMesh.new()
 	lb.size = Vector3(5.6, 0.18, 0.20)
 	var lbi := MeshInstance3D.new()
-	lbi.mesh = lb; lbi.material_override = mat
+	lbi.mesh = lb; lbi.material_override = torii_mat
 	lbi.position = Vector3(0, 3.55, 0)
 	gate.add_child(lbi)
 
-	# Shimenawa — twisted rope spanning the gate
+	# Shimenawa — twisted rope spanning the gate, neon-red glowing
 	var rope := MeshInstance3D.new()
 	var rm := CylinderMesh.new()
 	rm.height = 5.4
@@ -229,8 +252,11 @@ func _spawn_gate(pos: Vector3) -> void:
 	rope.rotation_degrees.z = 90.0
 	rope.position = Vector3(0, 3.30, 0)
 	var rope_mat := StandardMaterial3D.new()
-	rope_mat.albedo_color = Color(0.78, 0.72, 0.55)
+	rope_mat.albedo_color = Color(0.78, 0.16, 0.10)
 	rope_mat.roughness = 1.0
+	rope_mat.emission_enabled = true
+	rope_mat.emission = Color(0.95, 0.20, 0.12)
+	rope_mat.emission_energy_multiplier = 0.18
 	rope.material_override = rope_mat
 	gate.add_child(rope)
 
@@ -251,22 +277,31 @@ func _spawn_gate(pos: Vector3) -> void:
 		gate.add_child(sh_top)
 
 	# Collision — only the posts. Walking under the gate must NOT be blocked.
+	# Use the same 5° tilt so collision matches the visible mesh.
 	for side: float in [-1.0, 1.0]:
-		var ps := BoxShape3D.new()
-		ps.size = Vector3(0.24, 4.0, 0.24)
+		var ps := CylinderShape3D.new()
+		ps.radius = 0.18
+		ps.height = 4.0
 		var pc := CollisionShape3D.new()
 		pc.shape = ps
 		pc.position = Vector3(side * 2.8, 2.0, 0)
+		pc.rotation_degrees = Vector3(0.0, 0.0, -side * 5.0)
 		gate.add_child(pc)
+	# Gate is already added to the scene at the top of this function so the
+	# deferred raycast can fire — no second add_child needed here.
 
-	add_child(gate)
-
-# Sign — wooden post with a board, set perpendicular to the path so the
-# label faces the player walking south. `yaw_deg` rotates the whole sign.
+# Sign — tall cylindrical post + flat board with a clean Label3D face.
+# Materials are flat unlit-feel ash-grey so the sign reads as physical world
+# geometry, not floating UI text. Raycast-snapped to ground via the deferred
+# helper used for the torii.
 func _spawn_sign(pos: Vector3, yaw_deg: float = 0.0) -> void:
 	var sign_body := StaticBody3D.new()
 	sign_body.position = pos
 	sign_body.rotation_degrees.y = yaw_deg
+	# Add to scene FIRST so the deferred ground snap can query the
+	# physics space when it fires next frame.
+	add_child(sign_body)
+	call_deferred("_snap_to_ground", sign_body, pos)
 
 	var post_m := CylinderMesh.new()
 	post_m.height = 2.2; post_m.top_radius = 0.05; post_m.bottom_radius = 0.06
@@ -324,5 +359,25 @@ func _spawn_sign(pos: Vector3, yaw_deg: float = 0.0) -> void:
 	pcoll.shape = pcs
 	pcoll.position = Vector3(0, 1.1, 0)
 	sign_body.add_child(pcoll)
+	# Sign was added to the scene at the top of this function so the deferred
+	# raycast can fire — no second add_child needed here.
 
-	add_child(sign_body)
+# Deferred ground-snap helper. Casts a ray straight down from 50 m above the
+# desired position, and if it hits a collision body, snaps the node to the
+# hit Y. Used by the torii gate and warning sign so they never float when
+# the parent terrain is offset. Falls back to the original Y if the ray misses.
+func _snap_to_ground(node: Node3D, original_pos: Vector3) -> void:
+	if not is_instance_valid(node) or not node.is_inside_tree():
+		return
+	var space := node.get_world_3d().direct_space_state
+	if not space:
+		return
+	var query := PhysicsRayQueryParameters3D.create(
+		Vector3(original_pos.x, original_pos.y + 50.0, original_pos.z),
+		Vector3(original_pos.x, original_pos.y - 50.0, original_pos.z))
+	query.collision_mask = 1
+	query.exclude = [node.get_rid()] if node is CollisionObject3D else []
+	var result := space.intersect_ray(query)
+	if result and result.has("position"):
+		var hit_pos: Vector3 = result["position"]
+		node.global_position = Vector3(original_pos.x, hit_pos.y, original_pos.z)

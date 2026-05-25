@@ -209,24 +209,31 @@ func _resolve_encounter() -> void:
 # translucent ghost-shader HangingSpirit — this is a body.
 
 func _build_corpse() -> void:
-	# Female hanging victim — matches the existing Hanako / yurei narrative.
-	# Pale dead skin, long flowing dark hair, long simple white kimono /
-	# burial dress. Head tilted to the side from the broken neck. The yurei
-	# she becomes when the note is read shares this silhouette deliberately:
-	# "this corpse stood up and started walking".
-	var skin := StandardMaterial3D.new()
-	# Death pallor — darker than living skin so the corpse doesn't read as
-	# pure white under the moonlight + bloom (which is what was happening
-	# in playtest screenshots).
-	skin.albedo_color = Color(0.46, 0.44, 0.42)
-	skin.roughness = 0.96
-	skin.metallic_specular = 0.02
+	# Female hanging victim — primary body parts use the corpse_anomaly
+	# shader so the corpse reads as a "stuttering energy anomaly" rather
+	# than a smooth cylinder stack. Auxiliary props (rope, noose, pebbles)
+	# stay physical so the scene still has tangible grounding.
+	var anomaly := load("res://shaders/corpse_anomaly.gdshader") as Shader
 
-	var kimono_mat := StandardMaterial3D.new()
-	# Soiled, damp burial kimono — not bright white. Dampened to mid-grey
-	# so the cloth doesn't blow out the silhouette.
-	kimono_mat.albedo_color = Color(0.42, 0.42, 0.40)
-	kimono_mat.roughness = 0.97
+	var skin := ShaderMaterial.new()
+	skin.shader = anomaly
+	# Anomaly tone for the skin — bone-pale with a faint cool tint.
+	skin.set_shader_parameter("anomaly_color", Color(0.78, 0.82, 0.88, 0.92))
+	skin.set_shader_parameter("jitter_freq", 5.4)
+	skin.set_shader_parameter("jitter_amp", 0.008)
+	skin.set_shader_parameter("rim_exponent", 1.8)
+	skin.set_shader_parameter("core_alpha", 0.28)
+	skin.set_shader_parameter("rim_bleed", 1.5)
+
+	var kimono_mat := ShaderMaterial.new()
+	kimono_mat.shader = anomaly
+	# Kimono — warmer off-white, more cloth ripple
+	kimono_mat.set_shader_parameter("anomaly_color", Color(0.66, 0.66, 0.62, 0.86))
+	kimono_mat.set_shader_parameter("jitter_freq", 6.5)
+	kimono_mat.set_shader_parameter("jitter_amp", 0.018)
+	kimono_mat.set_shader_parameter("rim_exponent", 1.6)
+	kimono_mat.set_shader_parameter("core_alpha", 0.22)
+	kimono_mat.set_shader_parameter("rim_bleed", 1.6)
 
 	var sash_mat := StandardMaterial3D.new()
 	sash_mat.albedo_color = Color(0.42, 0.10, 0.10)     # dark red obi
