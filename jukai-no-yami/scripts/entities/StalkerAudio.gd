@@ -53,7 +53,9 @@ func start_footsteps(interval: float = 0.55) -> void:
 
 func stop_footsteps() -> void:
 	_step_interval = 0.0
-	_step_player.stop()
+	# Soft fade — footsteps are short transients so a quick 0.4s glide is
+	# enough to avoid the "audio yanked off the deck" feel.
+	_fade_out(_step_player, 0.4)
 
 func tick_footstep(delta: float) -> void:
 	if _step_interval <= 0.0:
@@ -123,11 +125,28 @@ func play_retreat() -> void:
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 func stop_all() -> void:
-	_step_player.stop()
-	_breath_player.stop()
-	_ambient_player.stop()
-	_oneshot_player.stop()
+	# Fade everything out together instead of slamming each player to stop.
+	# The stalker entering cooldown should feel like the presence drifts
+	# away, not like the audio engine crashed.
+	_fade_out(_step_player, 0.8)
+	_fade_out(_breath_player, 1.5)
+	_fade_out(_ambient_player, 2.0)
+	_fade_out(_oneshot_player, 1.2)
 	_step_interval = 0.0
+
+
+# Tween volume_db down to -80, then stop the player. Idempotent if the
+# player isn't currently playing.
+func _fade_out(player: AudioStreamPlayer3D, time: float) -> void:
+	if not player or not player.playing:
+		return
+	var orig_db := player.volume_db
+	var tw := create_tween()
+	tw.tween_property(player, "volume_db", -80.0, time)
+	await tw.finished
+	if player and player.playing:
+		player.stop()
+		player.volume_db = orig_db
 
 func _load_and_play(player: AudioStreamPlayer3D, path: String) -> void:
 	if not ResourceLoader.exists(path):

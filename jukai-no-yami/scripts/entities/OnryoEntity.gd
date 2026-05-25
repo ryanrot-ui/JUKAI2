@@ -197,6 +197,14 @@ func _begin_charge() -> void:
 	AudioManager.play_ghost_sound("onryo_growl")
 
 func repel() -> void:
+	# Shrines call repel() on EVERY onryo in the scene, including ones that
+	# haven't been activated yet — those still have _player == null.
+	# Fall back to GameManager.player_ref, and just no-op for an inactive
+	# onryo (repelling a dormant ghost is meaningless).
+	if not _player:
+		_player = GameManager.player_ref
+	if not _player or state == State.DORMANT:
+		return
 	state = State.REPELLED
 	_repel_t = 0.0
 	var away = (global_position - _player.global_position).normalized()

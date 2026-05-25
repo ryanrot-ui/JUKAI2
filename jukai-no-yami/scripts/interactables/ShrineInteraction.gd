@@ -19,20 +19,21 @@ func _ready() -> void:
 
 	_build_shrine_mesh()
 
+	# Collision wraps the stone base + cabinet (matches the new hokora shape).
 	var box = BoxShape3D.new()
-	box.size = Vector3(1.2, 1.6, 0.8)
+	box.size = Vector3(1.40, 1.40, 1.10)
 	var col = CollisionShape3D.new()
 	col.shape = box
-	col.position = Vector3(0, 0.8, 0)
+	col.position = Vector3(0, 0.70, 0)
 	add_child(col)
 
 	_light = OmniLight3D.new()
-	_light.position = Vector3(0, 1.5, 0)
-	_light.omni_range = 6.0
+	_light.position = Vector3(0, 1.10, 0)
+	_light.omni_range = 5.5
 	add_child(_light)
 
 	_prompt = Label3D.new()
-	_prompt.position = Vector3(0, 2.6, 0)
+	_prompt.position = Vector3(0, 1.90, 0)
 	_prompt.pixel_size = 0.004
 	_prompt.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	_prompt.text = "[E] 祈る — Pray (restore calm)"
@@ -56,54 +57,176 @@ func _ready() -> void:
 	_update_light()
 
 func _build_shrine_mesh() -> void:
-	var wood = StandardMaterial3D.new()
-	wood.albedo_color = Color(0.14, 0.09, 0.05)
-	wood.roughness = 0.94
+	# ── Hokora (祠) — traditional tiny Japanese roadside shrine ──────────
+	# Layered construction: stone base → wooden shrine cabinet with sloped
+	# roof → mini torii in front → offerings (stones, sake bottle) → shimenawa
+	# rope with shide paper streamers at the torii.
 
-	# Torii posts
-	for side in [-1, 1]:
-		var post = MeshInstance3D.new()
-		var pm = CylinderMesh.new()
-		pm.height = 2.4
-		pm.top_radius = 0.07
-		pm.bottom_radius = 0.09
-		post.mesh = pm
-		post.material_override = wood
-		post.position = Vector3(side * 0.55, 1.2, 0)
-		add_child(post)
+	var stone_mat := StandardMaterial3D.new()
+	stone_mat.albedo_color = Color(0.42, 0.42, 0.38)
+	stone_mat.roughness = 0.95
+	stone_mat.metallic = 0.0
+	stone_mat.metallic_specular = 0.05
 
-	var beam = MeshInstance3D.new()
-	var bm = BoxMesh.new()
-	bm.size = Vector3(1.35, 0.1, 0.1)
-	beam.mesh = bm
-	beam.material_override = wood
-	beam.position = Vector3(0, 2.35, 0)
-	add_child(beam)
+	var dark_stone_mat := StandardMaterial3D.new()
+	dark_stone_mat.albedo_color = Color(0.32, 0.32, 0.30)
+	dark_stone_mat.roughness = 0.97
 
-	var altar = MeshInstance3D.new()
-	var am = BoxMesh.new()
-	am.size = Vector3(0.5, 0.35, 0.4)
-	altar.mesh = am
-	altar.material_override = wood
-	altar.position = Vector3(0, 0.18, 0)
-	add_child(altar)
+	var moss_stone_mat := StandardMaterial3D.new()
+	moss_stone_mat.albedo_color = Color(0.30, 0.34, 0.24)
+	moss_stone_mat.roughness = 0.95
 
-	# Sacred rope
-	var rope = MeshInstance3D.new()
-	var rm = CylinderMesh.new()
-	rm.height = 0.04
-	rm.top_radius = 0.55
-	rm.bottom_radius = 0.55
-	rope.mesh = rm
-	var rope_mat = StandardMaterial3D.new()
-	rope_mat.albedo_color = Color(0.75, 0.12, 0.10)
-	rope_mat.emission_enabled = true
-	rope_mat.emission = Color(0.9, 0.15, 0.1)
-	rope_mat.emission_energy_multiplier = 0.2
-	rope.material_override = rope_mat
-	rope.position = Vector3(0, 1.85, 0)
-	rope.rotation_degrees.x = 90.0
-	add_child(rope)
+	var wood_dark := StandardMaterial3D.new()
+	wood_dark.albedo_color = Color(0.18, 0.10, 0.06)
+	wood_dark.roughness = 0.92
+
+	var wood_red := StandardMaterial3D.new()
+	wood_red.albedo_color = Color(0.42, 0.10, 0.08)
+	wood_red.roughness = 0.85
+	wood_red.metallic_specular = 0.20
+
+	var tile_mat := StandardMaterial3D.new()
+	tile_mat.albedo_color = Color(0.16, 0.16, 0.18)
+	tile_mat.roughness = 0.62
+	tile_mat.metallic = 0.10
+	tile_mat.metallic_specular = 0.45
+
+	var gold_mat := StandardMaterial3D.new()
+	gold_mat.albedo_color = Color(0.85, 0.70, 0.32)
+	gold_mat.metallic = 0.78
+	gold_mat.roughness = 0.32
+	gold_mat.emission_enabled = true
+	gold_mat.emission = Color(0.95, 0.78, 0.42)
+	gold_mat.emission_energy_multiplier = 0.18
+
+	var shide_mat := StandardMaterial3D.new()
+	shide_mat.albedo_color = Color(0.94, 0.92, 0.86)
+	shide_mat.roughness = 0.95
+	shide_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+
+	# ── Stone base (3 layers — flat slab on the ground, then a stepped plinth)
+	_add_block(Vector3(1.40, 0.10, 1.10), Vector3(0, 0.05, 0), moss_stone_mat)
+	_add_block(Vector3(1.10, 0.20, 0.90), Vector3(0, 0.20, 0), stone_mat)
+	_add_block(Vector3(0.85, 0.16, 0.70), Vector3(0, 0.38, 0), dark_stone_mat)
+
+	# ── Wooden shrine cabinet (honden) on top of the plinth
+	var cabinet_y := 0.46
+	# Cabinet walls (back + 2 sides). Front is left open for the offering.
+	_add_block(Vector3(0.72, 0.62, 0.08), Vector3(0,    cabinet_y + 0.31, -0.30), wood_dark)  # back wall
+	_add_block(Vector3(0.08, 0.62, 0.60), Vector3(-0.32, cabinet_y + 0.31,  0.00), wood_dark)  # left wall
+	_add_block(Vector3(0.08, 0.62, 0.60), Vector3( 0.32, cabinet_y + 0.31,  0.00), wood_dark)  # right wall
+	# Floor of cabinet (dark wood)
+	_add_block(Vector3(0.72, 0.05, 0.60), Vector3(0, cabinet_y + 0.025, 0), wood_red)
+	# Small gold offering tablet inside the cabinet
+	_add_block(Vector3(0.18, 0.22, 0.04), Vector3(0, cabinet_y + 0.15, -0.20), gold_mat)
+
+	# ── Pitched roof: two angled boards meeting at the ridge ────────────────
+	# Left slope
+	_add_block(Vector3(0.46, 0.06, 0.78), Vector3(-0.20, cabinet_y + 0.78, 0), tile_mat, Vector3(0, 0, -28.0))
+	# Right slope
+	_add_block(Vector3(0.46, 0.06, 0.78), Vector3( 0.20, cabinet_y + 0.78, 0), tile_mat, Vector3(0, 0, 28.0))
+	# Ridge piece (katsuogi-like)
+	_add_block(Vector3(0.06, 0.10, 0.84), Vector3(0, cabinet_y + 0.92, 0), wood_dark)
+	# Roof gable end (front triangle filler — small box for now)
+	_add_block(Vector3(0.74, 0.18, 0.06), Vector3(0, cabinet_y + 0.78, 0.40), wood_dark)
+
+	# ── Mini torii in front of the shrine (entrance gate, ~1 m tall) ────────
+	var torii_z := 0.62
+	# Two vertical posts
+	_add_cylinder(0.05, 1.05, Vector3(-0.42, 0.52, torii_z), wood_red)
+	_add_cylinder(0.05, 1.05, Vector3( 0.42, 0.52, torii_z), wood_red)
+	# Top beam (kasagi) — slight overhang to either side
+	_add_block(Vector3(1.05, 0.07, 0.10), Vector3(0, 1.04, torii_z), wood_red)
+	# Second beam (nuki) just below
+	_add_block(Vector3(0.92, 0.05, 0.07), Vector3(0, 0.92, torii_z), wood_red)
+	# Shimenawa — thick twisted rope spanning between the two posts
+	var shimenawa := MeshInstance3D.new()
+	var srm := CylinderMesh.new()
+	srm.height = 0.94
+	srm.top_radius = 0.035
+	srm.bottom_radius = 0.035
+	shimenawa.mesh = srm
+	shimenawa.material_override = _make_rope_mat()
+	shimenawa.rotation_degrees.z = 90.0
+	shimenawa.position = Vector3(0, 0.84, torii_z)
+	add_child(shimenawa)
+	# Shide — paper streamers that hang DOWN from the shimenawa
+	for i in 4:
+		var sh := MeshInstance3D.new()
+		var sm := BoxMesh.new()
+		sm.size = Vector3(0.05, 0.30, 0.008)
+		sh.mesh = sm
+		sh.material_override = shide_mat
+		sh.position = Vector3(-0.32 + i * 0.22, 0.68, torii_z + 0.01)
+		add_child(sh)
+
+	# ── Offerings on the plinth in front of the cabinet ─────────────────────
+	# Small rounded stones (river pebbles)
+	for i in 3:
+		var pebble := MeshInstance3D.new()
+		var pm := SphereMesh.new()
+		pm.radius = 0.045 + float(i) * 0.012
+		pm.height = pm.radius * 2.0
+		pebble.mesh = pm
+		pebble.material_override = dark_stone_mat
+		pebble.position = Vector3(-0.18 + i * 0.18, 0.50, 0.28)
+		add_child(pebble)
+	# Sake bottle (small white cylinder)
+	var bottle := MeshInstance3D.new()
+	var bm := CylinderMesh.new()
+	bm.height = 0.18; bm.top_radius = 0.04; bm.bottom_radius = 0.055
+	bottle.mesh = bm
+	var bottle_mat := StandardMaterial3D.new()
+	bottle_mat.albedo_color = Color(0.88, 0.85, 0.78)
+	bottle_mat.roughness = 0.32
+	bottle_mat.metallic = 0.05
+	bottle.material_override = bottle_mat
+	bottle.position = Vector3(0.25, 0.55, 0.20)
+	add_child(bottle)
+
+	# ── Small soft glow inside the cabinet (sacred presence) ────────────────
+	var inner_light := OmniLight3D.new()
+	inner_light.position = Vector3(0, cabinet_y + 0.25, -0.10)
+	inner_light.light_color = Color(0.96, 0.82, 0.48)
+	inner_light.light_energy = 0.55
+	inner_light.omni_range = 1.6
+	inner_light.shadow_enabled = false
+	add_child(inner_light)
+
+
+# Helper — add a box with optional rotation, parented to the shrine.
+func _add_block(size: Vector3, pos: Vector3, mat: Material, rot_deg: Vector3 = Vector3.ZERO) -> void:
+	var mi := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = size
+	mi.mesh = bm
+	mi.position = pos
+	mi.rotation_degrees = rot_deg
+	mi.material_override = mat
+	add_child(mi)
+
+
+# Helper — add a cylinder (vertical by default).
+func _add_cylinder(radius: float, height: float, pos: Vector3, mat: Material) -> void:
+	var mi := MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.top_radius = radius
+	cm.bottom_radius = radius
+	cm.height = height
+	cm.radial_segments = 14
+	mi.mesh = cm
+	mi.position = pos
+	mi.material_override = mat
+	add_child(mi)
+
+
+# Thick twisted-rope material for the shimenawa.
+func _make_rope_mat() -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Color(0.82, 0.74, 0.55)
+	m.roughness = 0.96
+	m.metallic = 0.0
+	return m
 
 func _update_light() -> void:
 	if already_used:

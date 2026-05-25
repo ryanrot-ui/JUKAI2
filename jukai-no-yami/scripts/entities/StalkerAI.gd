@@ -113,27 +113,114 @@ func _build_body() -> void:
 	col.position.y = 0.95
 	add_child(col)
 
-	# Dark shadowy silhouette using ghost shader (nearly opaque, very dark)
-	_mesh = MeshInstance3D.new()
-	var body_mesh = CapsuleMesh.new()
-	body_mesh.radius = 0.34
-	body_mesh.height = 1.90
-	body_mesh.radial_segments = 10
-	body_mesh.rings = 4
-	_mesh.mesh = body_mesh
-	_mesh.position.y = 0.95
-	_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# ── Pale yurei figure — tall, white burial kimono, long black hair ────
+	# This is the recurring follower-spirit (separate from the scripted
+	# Yurei_Edge / Yurei_Behind which only show up during specific scares).
+	# Built deliberately to look like a vengeful Japanese ghost, not a
+	# generic dark blob.
+	var body_root := Node3D.new()
+	body_root.name = "YureiForm"
+	add_child(body_root)
+	_mesh = MeshInstance3D.new()  # kept for _set_shader_alpha compatibility
+	body_root.add_child(_mesh)
 
-	# Re-use ghost shader but tuned for a dark lurking silhouette
-	var mat = ShaderMaterial.new()
-	mat.shader = load("res://shaders/ghost_material.gdshader")
-	mat.set_shader_parameter("ghost_color",    Color(0.04, 0.02, 0.06, 0.70))
-	mat.set_shader_parameter("edge_glow",      0.25)
-	mat.set_shader_parameter("distort_speed",  0.08)
-	mat.set_shader_parameter("distort_amount", 0.005)
-	mat.set_shader_parameter("flicker_speed",  0.4)
-	_mesh.material_override = mat
-	add_child(_mesh)
+	# Ghost-shader material applied to the body parts that should glow
+	var pale_mat := ShaderMaterial.new()
+	pale_mat.shader = load("res://shaders/ghost_material.gdshader")
+	pale_mat.set_shader_parameter("ghost_color",    Color(0.90, 0.92, 0.96, 0.78))
+	pale_mat.set_shader_parameter("edge_glow",      1.6)
+	pale_mat.set_shader_parameter("distort_speed",  0.20)
+	pale_mat.set_shader_parameter("distort_amount", 0.008)
+	pale_mat.set_shader_parameter("flicker_speed",  1.4)
+	pale_mat.set_shader_parameter("body_glow",      0.55)
+	_mesh.material_override = pale_mat
+	_mesh.mesh = SphereMesh.new()  # tiny invisible anchor; real mesh below
+
+	# Kimono / robe — a tall tapered cylinder that drapes from chest to floor
+	var robe := MeshInstance3D.new()
+	var robe_m := CylinderMesh.new()
+	robe_m.top_radius = 0.22
+	robe_m.bottom_radius = 0.46
+	robe_m.height = 1.60
+	robe_m.radial_segments = 18
+	robe.mesh = robe_m
+	robe.position = Vector3(0, 0.80, 0)
+	robe.material_override = pale_mat
+	robe.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	body_root.add_child(robe)
+
+	# Torso / shoulders — wider band above the robe
+	var torso := MeshInstance3D.new()
+	var torso_m := CapsuleMesh.new()
+	torso_m.radius = 0.26
+	torso_m.height = 0.62
+	torso.mesh = torso_m
+	torso.position = Vector3(0, 1.58, 0)
+	torso.material_override = pale_mat
+	torso.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	body_root.add_child(torso)
+
+	# Limp arms hanging at the sides — narrow vertical capsules
+	for side: float in [-1.0, 1.0]:
+		var arm := MeshInstance3D.new()
+		var arm_m := CapsuleMesh.new()
+		arm_m.radius = 0.07
+		arm_m.height = 0.85
+		arm.mesh = arm_m
+		arm.position = Vector3(side * 0.30, 1.30, 0.02)
+		arm.material_override = pale_mat
+		arm.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		body_root.add_child(arm)
+
+	# Head — pale sphere
+	var head := MeshInstance3D.new()
+	var head_m := SphereMesh.new()
+	head_m.radius = 0.20
+	head_m.height = 0.40
+	head.mesh = head_m
+	head.position = Vector3(0, 2.00, 0)
+	head.material_override = pale_mat
+	head.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	body_root.add_child(head)
+
+	# Long black hair — front side (covers face partly, classic yurei silhouette)
+	var hair_mat := StandardMaterial3D.new()
+	hair_mat.albedo_color = Color(0.04, 0.03, 0.04, 0.96)
+	hair_mat.roughness = 0.96
+	hair_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	hair_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+
+	var hair_back := MeshInstance3D.new()
+	var hair_back_m := CapsuleMesh.new()
+	hair_back_m.radius = 0.21
+	hair_back_m.height = 1.40
+	hair_back.mesh = hair_back_m
+	hair_back.position = Vector3(0, 1.40, -0.08)
+	hair_back.material_override = hair_mat
+	body_root.add_child(hair_back)
+
+	# Hair side curtains — fall in front of the face
+	var hair_front := MeshInstance3D.new()
+	var hf_m := BoxMesh.new()
+	hf_m.size = Vector3(0.36, 0.42, 0.04)
+	hair_front.mesh = hf_m
+	hair_front.position = Vector3(0, 1.94, 0.18)
+	hair_front.material_override = hair_mat
+	body_root.add_child(hair_front)
+
+	# Hollow black eye sockets (just visible through the hair curtain)
+	for side: float in [-1.0, 1.0]:
+		var eye := MeshInstance3D.new()
+		var eye_m := SphereMesh.new()
+		eye_m.radius = 0.035
+		eye_m.height = 0.07
+		eye.mesh = eye_m
+		eye.position = Vector3(side * 0.07, 2.02, 0.19)
+		var eye_mat := StandardMaterial3D.new()
+		eye_mat.albedo_color = Color(0.01, 0.01, 0.015)
+		eye_mat.roughness = 0.10
+		eye.material_override = eye_mat
+		body_root.add_child(eye)
 
 # ─── Public API ───────────────────────────────────────────────────────────────
 

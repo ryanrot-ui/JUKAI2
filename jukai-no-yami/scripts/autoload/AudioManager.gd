@@ -73,6 +73,7 @@ var _has_file_ambient: bool = false
 var _music_note_freq:  float = 98.00
 var _music_note_start: float = -999.0  # absolute _music_time when note fired
 var _music_next_note:  float = 2.0     # next trigger time
+var _music_fading_out: bool  = false   # guard so _tick_music doesn't restart the fade
 
 # ── Environmental audio ───────────────────────────────────────────────────────
 # First-creepy-sound delay PER level. Without this the timer persists across
@@ -188,15 +189,29 @@ func _ensure_drone_stopped() -> void:
 func _tick_music() -> void:
 	var in_menu = (GameManager.state == GameManager.GameState.MENU)
 	if not in_menu:
-		if _music_player.playing:
-			_music_player.stop()
-			_music_time = 0.0
+		# Don't hard-stop the music when leaving the menu — fade it out so
+		# the transition into the game doesn't feel like the soundtrack got
+		# yanked off the deck.
+		if _music_player.playing and not _music_fading_out:
+			_music_fading_out = true
+			var fade = create_tween()
+			fade.tween_property(_music_player, "volume_db", -80.0, 2.2)
+			await fade.finished
+			if _music_player.playing:
+				_music_player.stop()
+				_music_player.volume_db = -12.0
+				_music_time = 0.0
+			_music_fading_out = false
 		return
 	if not _music_player.playing:
 		_music_time        = 0.0
 		_music_note_start  = -999.0
 		_music_next_note   = 2.5
+		_music_player.volume_db = -80.0
 		_music_player.play()
+		# Fade IN when entering menu
+		var fade_in = create_tween()
+		fade_in.tween_property(_music_player, "volume_db", -12.0, 1.6)
 	var pb = _music_player.get_stream_playback() as AudioStreamGeneratorPlayback
 	if not pb:
 		return
@@ -619,9 +634,9 @@ func _synth_voice_cry(duration: float, pitch_hz: float, breath: float, intensity
 		# Bell-shaped amplitude with sob amplitude wobble
 		var env := sin(PI * phase) * (0.82 + 0.18 * sin(TAU * 1.2 * t))
 		env *= 0.45 + 0.55 * intensity
-		var s := (voiced * 0.65 + bn * 0.35) * env
-		# Mild stereo width — left/right phase-shifted breath
-		var sl := voiced * 0.65 * env + (_rng.randf() * 2.0 - 1.0) * breath * 0.55 * env * 0.35
+		# Mild stereo width — left/right channels each get their own breath noise
+		# (bn above is unused now; the stereo channels generate fresh noise per side).
+		var sl := voiced * 0.65 * env + (_rng.randf() * 2.0 - 1.0) * breath * 0.55 * env * 0.35 + bn * 0.0
 		var sr := voiced * 0.65 * env + (_rng.randf() * 2.0 - 1.0) * breath * 0.55 * env * 0.35
 		buf[i] = Vector2(clampf(sl * 0.78, -1.0, 1.0), clampf(sr * 0.78, -1.0, 1.0))
 	return buf
@@ -887,7 +902,6 @@ func _synth_click(duration: float, brighter: bool) -> PackedVector2Array:
 	var center_freq := 2200.0 if brighter else 1100.0
 	for i in n:
 		var t := float(i) / float(SYNTH_RATE)
-		var phase := t / duration
 		var noise := (_rng.randf() * 2.0 - 1.0)
 		var pitch := sin(TAU * center_freq * t) * exp(-t * 80.0)
 		var s := (noise * 0.45 + pitch * 0.55) * exp(-t * 60.0) * 0.55

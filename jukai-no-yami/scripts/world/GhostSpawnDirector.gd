@@ -16,6 +16,9 @@ extends Node
 #   5. (Ribbon Path, Note 3 pickup) Flashlight briefly dies. When it comes back,
 #      Yurei is right at camera filling the frame → MAX intensity scare.
 
+# Reserved for future use — emitted when all 5 scares in a level have fired.
+# Underscore prefix tells Godot it's intentionally undeclared-by-consumers.
+@warning_ignore("unused_signal")
 signal all_scares_complete
 
 @export_group("Level Scare Config")
