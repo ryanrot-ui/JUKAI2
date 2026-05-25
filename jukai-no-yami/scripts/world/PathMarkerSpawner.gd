@@ -31,7 +31,8 @@ func build() -> void:
 		if n % 2 == 0:
 			_place_stake(Vector3(-sx, 0, z), rng, stake_mat)
 		if lantern_every > 0 and n % lantern_every == 0:
-			var stake_idx: int = int(n / lantern_every)
+			@warning_ignore("integer_division")
+			var stake_idx: int = n / lantern_every
 			var lan_side: int = 1 if (stake_idx % 2 == 0) else -1
 			_place_lantern(Vector3(lan_side * (path_hw - 0.3), 0, z), rng)
 		z -= stake_spacing

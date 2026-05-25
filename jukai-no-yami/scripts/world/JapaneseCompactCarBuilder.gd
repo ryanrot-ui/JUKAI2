@@ -123,18 +123,21 @@ static func build(
 	_add_box(vis, Vector3(WIDTH * 0.94, 0.14, 0.16), Vector3(0, 0.34, 1.98), plastic)
 	_add_box(vis, Vector3(WIDTH * 0.92, 0.14, 0.16), Vector3(0, 0.34, -1.98), plastic)
 
-	# Wheels — torus tires, axle along X (correct ground alignment)
+	# Wheels — torus tires, axle along X (correct ground alignment).
+	# Loop variables are typed explicitly so := type inference works on
+	# is_front / steer below — without `fz: float`, fz is Variant and the
+	# `fz > 0.0` comparison parses but can't be inferred for the new var.
 	var wheel_y := WHEEL_RADIUS + 0.02
 	var hx := TRACK * 0.5
-	for fz in [WHEELBASE_HALF, -WHEELBASE_HALF]:
-		var is_front := fz > 0.0
-		var steer := front_steer if is_front else 0.0
+	for fz: float in [WHEELBASE_HALF, -WHEELBASE_HALF]:
+		var is_front: bool = fz > 0.0
+		var steer: float = front_steer if is_front else 0.0
 		_make_wheel(vis, Vector3(hx, wheel_y, fz), steer, rubber, chrome, abandoned)
 		_make_wheel(vis, Vector3(-hx, wheel_y, fz), -steer, rubber, chrome, abandoned)
 
 	# Wheel arch hints (dark shadow strip)
-	for side in [-1.0, 1.0]:
-		for fz in [WHEELBASE_HALF, -WHEELBASE_HALF]:
+	for side: float in [-1.0, 1.0]:
+		for fz: float in [WHEELBASE_HALF, -WHEELBASE_HALF]:
 			_add_box(vis, Vector3(0.18, 0.06, 0.38), Vector3(side * (hx + 0.08), 0.58, fz), black)
 
 	# Collision hull
