@@ -40,6 +40,13 @@ const CRY_TIERS = [
 func _ready() -> void:
 	GameManager.sanity_ref = self
 
+func _exit_tree() -> void:
+	# Clear the autoload reference so consumers don't see a 'previously freed'
+	# pointer between scene swaps. Godot's `if obj:` returns true for a freed
+	# Object handle, so without this every subsequent .sanity access errors.
+	if GameManager.sanity_ref == self:
+		GameManager.sanity_ref = null
+
 func _process(delta: float) -> void:
 	if GameManager.state != GameManager.GameState.PLAYING:
 		return

@@ -41,7 +41,15 @@ func _ready() -> void:
 	GameManager.note_collected.connect(_on_note_collected)
 	_refresh_note_counter()
 	await get_tree().process_frame
+	# Scene may have been swapped while we awaited — the HUD is detached and
+	# get_tree() returns null. Bail out instead of crashing on the lookup.
+	if not is_inside_tree():
+		return
 	_connect_vignette()
+
+func _exit_tree() -> void:
+	if GameManager.ui_ref == self:
+		GameManager.ui_ref = null
 
 func _build_hud() -> void:
 	vignette = _make_overlay(Color(0, 0, 0, 0))
@@ -512,12 +520,16 @@ func _connect_vignette() -> void:
 			sanity.overlay_node = halluc_overlay
 
 func _process(_delta: float) -> void:
-	if GameManager.sanity_ref:
+	# _build_hud constructs the bars synchronously in _ready, but _process can
+	# fire during early teardown of the HUD on scene swap when child Controls
+	# have already been freed but UIManager itself hasn't been. Guard the bars.
+	if sanity_bar and is_instance_valid(GameManager.sanity_ref):
 		sanity_bar.value = GameManager.sanity_ref.sanity
 	var fl = _get_flashlight()
-	if fl:
+	if battery_bar and fl:
 		battery_bar.value = fl.battery
-		battery_icon.modulate = Color(0.78, 0.74, 0.52)
+		if battery_icon:
+			battery_icon.modulate = Color(0.78, 0.74, 0.52)
 
 func _refresh_note_counter() -> void:
 	var n = GameManager.collected_notes.size()

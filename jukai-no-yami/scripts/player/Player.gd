@@ -137,6 +137,13 @@ func _make_flashlight_cookie() -> ImageTexture:
 			img.set_pixel(x, y, Color(val, val, val))
 	return ImageTexture.create_from_image(img)
 
+func _exit_tree() -> void:
+	# Drop autoload references so they don't dangle to a freed CharacterBody3D
+	# during scene swaps. Without this, consumers see `is_instance_valid==false`
+	# only after the next frame and may try to read .position first.
+	if GameManager.player_ref == self:
+		GameManager.player_ref = null
+
 func _input(event: InputEvent) -> void:
 	if is_dead:
 		return

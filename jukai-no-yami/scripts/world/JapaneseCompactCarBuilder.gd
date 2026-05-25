@@ -166,12 +166,15 @@ static func _make_wheel(
 	mount.rotation_degrees.y = steer_deg
 	parent.add_child(mount)
 
-	# Tire — torus lies in YZ by default; rotate so hole (axle) runs along X
+	# Tire — torus lies in YZ by default; rotate so hole (axle) runs along X.
+	# Godot 4 TorusMesh exposes `rings` (slices around the main ring) and
+	# `ring_segments` (segments around the tube). `radial_segments` does not
+	# exist on TorusMesh — that property is on Cylinder/Sphere.
 	var tire_mesh := TorusMesh.new()
 	tire_mesh.inner_radius = WHEEL_RADIUS - 0.09
 	tire_mesh.outer_radius = WHEEL_RADIUS
 	tire_mesh.ring_segments = 18
-	tire_mesh.radial_segments = 12
+	tire_mesh.rings = 12
 	var tire := MeshInstance3D.new()
 	tire.name = "Tire"
 	tire.mesh = tire_mesh
