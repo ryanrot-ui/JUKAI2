@@ -1,0 +1,13 @@
+# Godot 4 — never commit editor cache (causes stale script errors on reimport)
+.godot/
+*.import
+
+# Builds
+build/
+export/
+
+# OS
+.DS_Store
+
+# User settings (per machine)
+user://

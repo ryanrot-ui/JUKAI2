@@ -1,0 +1,14 @@
+# Godot 4 — never commit editor cache
+jukai-no-yami/.godot/
+**/.godot/
+*.import
+
+# Builds
+build/
+export/
+
+# OS
+.DS_Store
+
+# Re-bundled artifact (regenerated from source)
+jukai-no-yami.zip
