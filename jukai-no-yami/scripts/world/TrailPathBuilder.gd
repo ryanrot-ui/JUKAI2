@@ -197,12 +197,17 @@ func _make_path_mesh(parent: Node3D, center: Vector3, length: float, width: floa
 	var bm := BoxMesh.new()
 	bm.size = Vector3(width, 0.04, length)
 	mi.mesh = bm
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.38, 0.32, 0.22)
-	mat.roughness = 0.96
-	mat.emission_enabled = true
-	mat.emission = Color(0.12, 0.10, 0.06)
-	mat.emission_energy_multiplier = 0.35
+	# Atmospheric trail shader — distance + edge dither fade to black so
+	# the path doesn't read as a glaring white plastic ramp cutting off
+	# into the void. Falls to black past ~14m from the lens and within
+	# 25% of each horizontal edge.
+	var mat := ShaderMaterial.new()
+	mat.shader = load("res://shaders/atmospheric_trail.gdshader")
+	mat.set_shader_parameter("dirt_color", Color(0.38, 0.32, 0.22, 1.0))
+	mat.set_shader_parameter("fade_far", 14.0)
+	mat.set_shader_parameter("fade_band", 3.0)
+	mat.set_shader_parameter("edge_fade", 0.22)
+	mat.set_shader_parameter("emission_strength", 0.30)
 	mi.material_override = mat
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(mi)

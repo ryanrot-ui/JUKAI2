@@ -2,6 +2,7 @@ extends "res://scripts/world/LevelManager.gd"
 
 # _WORLD_SPAWN is inherited from LevelManager.
 const _GHOST_DIRECTOR := preload("res://scripts/world/GhostSpawnDirector.gd")
+const _CANOPY_DECOR := preload("res://scripts/world/CanopyDenseDecorator.gd")
 
 const YUREI_SCENE   = preload("res://scenes/entities/YureiEntity.tscn")
 const ONRYO_SCENE   = preload("res://scenes/entities/OnryoEntity.tscn")
@@ -22,7 +23,23 @@ func _ready() -> void:
 	_make_directional_light(Color(0.18, 0.16, 0.24), 0.10)
 
 	_make_floor(Vector3(200, 0.4, 200))
-	_add_guided_trail(Vector3(0, 0.03, -38), 100, 2.5, 7773322)
+	# Path made longer (140 m instead of 100) so the visible-trail end
+	# isn't reachable before the level-transition fade kicks in.
+	_add_guided_trail(Vector3(0, 0.03, -38), 140, 2.5, 7773322)
+
+	# Dense canopy silhouette overhead — blocks the empty sky above the
+	# trail so the player never sees a void looking up. Independent of
+	# the main TreeSpawner; this is pure decoration.
+	var canopy := Node3D.new()
+	canopy.name = "CanopyOverhead"
+	canopy.set_script(_CANOPY_DECOR)
+	canopy.path_center_z = -38.0
+	canopy.path_length = 160.0
+	canopy.side_offset = 4.5
+	canopy.canopy_band = 14.0
+	canopy.density = 0.85
+	canopy.random_seed = 71171
+	add_child(canopy)
 
 	_WORLD_SPAWN.add_tree_spawner(self, Vector3.ZERO, {
 		"count": 195, "area_size": Vector2(170, 170), "min_scale": 1.2, "max_scale": 2.6,

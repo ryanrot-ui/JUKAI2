@@ -22,7 +22,21 @@ func _ready() -> void:
 	_make_directional_light(Color(0.16, 0.14, 0.22), 0.09)
 
 	_make_floor(Vector3(120, 0.4, 240))
-	_add_guided_trail(Vector3(0, 0.03, -50), 120, 2.4, 3334444)
+	# Final stretch lengthened from 120 → 160 m so the player has more
+	# trail visible past the exit trigger when the cave gradient appears.
+	_add_guided_trail(Vector3(0, 0.03, -50), 160, 2.4, 3334444)
+
+	# Overhead canopy block — denser here because this is the deepest level.
+	var canopy := Node3D.new()
+	canopy.name = "CanopyOverhead"
+	canopy.set_script(preload("res://scripts/world/CanopyDenseDecorator.gd"))
+	canopy.path_center_z = -50.0
+	canopy.path_length = 180.0
+	canopy.side_offset = 4.0
+	canopy.canopy_band = 14.0
+	canopy.density = 0.95
+	canopy.random_seed = 33344
+	add_child(canopy)
 
 	_WORLD_SPAWN.add_tree_spawner(self, Vector3.ZERO, {
 		"count": 155, "area_size": Vector2(100, 210), "min_scale": 1.0, "max_scale": 2.4,

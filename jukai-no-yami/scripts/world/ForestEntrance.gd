@@ -29,7 +29,22 @@ func _ready() -> void:
 	_build_asphalt_backdrop()
 
 	# ── Guided trail — lanterns + emissive path (semi-linear, not a corridor) ─
-	_add_guided_trail(Vector3(0, 0.03, -40), 68, 2.6, 4242)
+	# Path lengthened from 68 → 100 m so the trail clearly continues past
+	# the exit trigger before the next level fades in.
+	_add_guided_trail(Vector3(0, 0.03, -40), 100, 2.6, 4242)
+
+	# Overhead canopy block — see CanopyDenseDecorator.gd. Cuts off the
+	# empty sky directly above the trail.
+	var canopy := Node3D.new()
+	canopy.name = "CanopyOverhead"
+	canopy.set_script(preload("res://scripts/world/CanopyDenseDecorator.gd"))
+	canopy.path_center_z = -40.0
+	canopy.path_length = 120.0
+	canopy.side_offset = 5.0
+	canopy.canopy_band = 12.0
+	canopy.density = 0.80
+	canopy.random_seed = 42420
+	add_child(canopy)
 
 	_WORLD_SPAWN.add_tree_spawner(self, Vector3(0, 0, -55), {
 		"count": 165, "area_size": Vector2(120, 80), "min_scale": 1.0, "max_scale": 2.4,

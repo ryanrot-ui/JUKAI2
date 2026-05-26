@@ -219,18 +219,48 @@ func _build_corpse() -> void:
 	# The CORPSE uses StandardMaterial3D (real dead body). The ghost that
 	# spawns from it uses the corpse_anomaly shader (see YureiEntity).
 
-	var skin := StandardMaterial3D.new()
-	skin.albedo_color = Color(0.56, 0.52, 0.50)        # death pallor — warm grey
-	skin.roughness = 0.94
-	skin.metallic_specular = 0.04
+	# All visible body parts now use the glitching_anomaly shader so the
+	# corpse reads as a matte-black silhouette edged in crimson rim, NOT
+	# a stack of pale snowman spheres. Each material instance shares the
+	# same shader but configures slightly different jitter frequencies
+	# so head / arms / legs don't all twist in lock-step.
+	var anomaly := load("res://shaders/glitching_anomaly.gdshader") as Shader
 
-	var kimono_mat := StandardMaterial3D.new()
-	kimono_mat.albedo_color = Color(0.48, 0.46, 0.42)  # soiled off-white
-	kimono_mat.roughness = 0.96
+	var skin := ShaderMaterial.new()
+	skin.shader = anomaly
+	skin.set_shader_parameter("core_color", Color(0.0, 0.0, 0.0, 1.0))
+	skin.set_shader_parameter("rim_color", Color(0.95, 0.05, 0.08, 1.0))
+	skin.set_shader_parameter("rim_power", 4.8)
+	skin.set_shader_parameter("rim_bleed", 2.2)
+	skin.set_shader_parameter("jitter_amp", 0.012)
+	skin.set_shader_parameter("jitter_freq", 4.0)
+	skin.set_shader_parameter("freq_x_mul", 1.0)
+	skin.set_shader_parameter("freq_y_mul", 1.6)
+	skin.set_shader_parameter("freq_z_mul", 0.7)
 
-	var sash_mat := StandardMaterial3D.new()
-	sash_mat.albedo_color = Color(0.36, 0.08, 0.08)    # dark red obi
-	sash_mat.roughness = 0.88
+	var kimono_mat := ShaderMaterial.new()
+	kimono_mat.shader = anomaly
+	kimono_mat.set_shader_parameter("core_color", Color(0.02, 0.0, 0.0, 1.0))
+	kimono_mat.set_shader_parameter("rim_color", Color(0.85, 0.92, 1.0, 1.0))   # pale white rim
+	kimono_mat.set_shader_parameter("rim_power", 5.2)
+	kimono_mat.set_shader_parameter("rim_bleed", 1.8)
+	kimono_mat.set_shader_parameter("jitter_amp", 0.020)
+	kimono_mat.set_shader_parameter("jitter_freq", 3.6)
+	kimono_mat.set_shader_parameter("freq_x_mul", 1.3)
+	kimono_mat.set_shader_parameter("freq_y_mul", 0.9)
+	kimono_mat.set_shader_parameter("freq_z_mul", 1.7)
+
+	var sash_mat := ShaderMaterial.new()
+	sash_mat.shader = anomaly
+	sash_mat.set_shader_parameter("core_color", Color(0.05, 0.0, 0.0, 1.0))
+	sash_mat.set_shader_parameter("rim_color", Color(1.0, 0.20, 0.12, 1.0))
+	sash_mat.set_shader_parameter("rim_power", 3.6)
+	sash_mat.set_shader_parameter("rim_bleed", 2.6)
+	sash_mat.set_shader_parameter("jitter_amp", 0.014)
+	sash_mat.set_shader_parameter("jitter_freq", 5.2)
+	sash_mat.set_shader_parameter("freq_x_mul", 0.8)
+	sash_mat.set_shader_parameter("freq_y_mul", 2.1)
+	sash_mat.set_shader_parameter("freq_z_mul", 1.1)
 
 	var rope_mat := StandardMaterial3D.new()
 	rope_mat.albedo_color = Color(0.42, 0.32, 0.20)
@@ -240,9 +270,20 @@ func _build_corpse() -> void:
 	dark_mat.albedo_color = Color(0.04, 0.04, 0.05)
 	dark_mat.roughness = 0.95
 
-	var hair_mat := StandardMaterial3D.new()
-	hair_mat.albedo_color = Color(0.05, 0.03, 0.04)
-	hair_mat.roughness = 0.94
+	# Hair uses the same anomaly shader but with a near-zero rim so it
+	# stays pure black — frames the rim-lit face without competing for
+	# visual attention.
+	var hair_mat := ShaderMaterial.new()
+	hair_mat.shader = anomaly
+	hair_mat.set_shader_parameter("core_color", Color(0.0, 0.0, 0.0, 1.0))
+	hair_mat.set_shader_parameter("rim_color", Color(0.10, 0.02, 0.04, 1.0))
+	hair_mat.set_shader_parameter("rim_power", 8.0)
+	hair_mat.set_shader_parameter("rim_bleed", 0.6)
+	hair_mat.set_shader_parameter("jitter_amp", 0.024)
+	hair_mat.set_shader_parameter("jitter_freq", 2.8)
+	hair_mat.set_shader_parameter("freq_x_mul", 1.5)
+	hair_mat.set_shader_parameter("freq_y_mul", 0.7)
+	hair_mat.set_shader_parameter("freq_z_mul", 2.3)
 
 	# ── Anatomical landmark Y-coordinates (metres above origin) ───────────
 	# Feet hang above ground (the corpse is suspended). Body is stretched

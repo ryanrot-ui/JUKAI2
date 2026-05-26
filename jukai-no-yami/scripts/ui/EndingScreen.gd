@@ -30,9 +30,21 @@ var retry_btn: Button
 var menu_btn: Button
 
 func _ready() -> void:
+	# CRITICAL: PROCESS_MODE_ALWAYS keeps the script + Tween running even
+	# if the SceneTree got paused before transitioning here. Without it
+	# the fade-in animation freezes on a black screen.
+	process_mode = Node.PROCESS_MODE_ALWAYS
+	get_tree().paused = false
 	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 	modulate.a = 0.0
-	set_anchors_preset(Control.PRESET_FULL_RECT)
+	# Belt + braces: set both anchors AND offsets so the Control fills
+	# the entire viewport on any aspect ratio. PRESET_FULL_RECT with
+	# keep_offsets=false resets offsets to zero, which is what we want.
+	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	# Stretch grow flags so AUTO sizing pushes outward rather than
+	# collapsing into the top-left corner if a parent forgot to size us.
+	size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	size_flags_vertical   = Control.SIZE_EXPAND_FILL
 
 	bg = ColorRect.new()
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
