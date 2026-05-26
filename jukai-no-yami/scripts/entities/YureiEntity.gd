@@ -212,61 +212,162 @@ func _reset() -> void:
 	_look_t = 0.0
 
 func _build_ghost_mesh() -> void:
-	var body = Node3D.new()
+	# Proper humanoid anatomy — head, neck, chest/waist/hips, shoulders,
+	# arms with elbows + wrists + hands, thighs + knees + shins + feet.
+	# Same skeleton as the HangingCorpse so the "this is the same person,
+	# now risen" reading lands. Materials use the ghost shader so the
+	# whole figure glows pale-translucent rather than reading as skin.
+	var body := Node3D.new()
 	body.name = "GhostBody"
 	add_child(body)
 
-	# Body
-	var bm = CapsuleMesh.new()
-	bm.radius = 0.34; bm.height = 1.45
-	var bmi = MeshInstance3D.new()
-	bmi.mesh = bm; bmi.position = Vector3(0, 0.78, 0)
-	bmi.material_override = _ghost_mat(Color(0.88, 0.90, 0.95), 0.80)
-	body.add_child(bmi)
+	# Shared ghost material for skin and kimono — pale luminous white.
+	var ghost := _ghost_mat(Color(0.86, 0.90, 0.96), 0.82)
+	# Slightly cooler version for the kimono cloth so it reads as fabric.
+	var ghost_cloth := _ghost_mat(Color(0.78, 0.80, 0.90), 0.74)
 
-	# Head
-	var hm = SphereMesh.new()
-	hm.radius = 0.28; hm.height = 0.56
-	var hmi = MeshInstance3D.new()
-	hmi.mesh = hm; hmi.position = Vector3(0, 1.60, 0)
-	hmi.material_override = _ghost_mat(Color(0.90, 0.92, 0.96), 0.88)
-	body.add_child(hmi)
+	var hair_mat := StandardMaterial3D.new()
+	hair_mat.albedo_color = Color(0.04, 0.03, 0.04, 0.96)
+	hair_mat.roughness = 0.95
+	hair_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	hair_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 
-	# Hair (long dark strands, hangs from back of head)
-	var hair_m = CapsuleMesh.new()
-	hair_m.radius = 0.20; hair_m.height = 0.92
-	var hair_mi = MeshInstance3D.new()
-	hair_mi.mesh = hair_m; hair_mi.position = Vector3(0, 1.32, -0.12)
-	var hair_mat = StandardMaterial3D.new()
-	hair_mat.albedo_color = Color(0.04, 0.03, 0.03, 0.95)
-	hair_mat.roughness = 0.95; hair_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	hair_mi.material_override = hair_mat
-	body.add_child(hair_mi)
+	var dark_mat := StandardMaterial3D.new()
+	dark_mat.albedo_color = Color(0.02, 0.02, 0.02)
+	dark_mat.roughness = 0.9
 
-	# Eyes (hollow black sockets)
-	for side in [-1, 1]:
-		var em = SphereMesh.new()
-		em.radius = 0.050; em.height = 0.10
-		var emi = MeshInstance3D.new()
-		emi.mesh = em; emi.position = Vector3(side * 0.092, 1.65, 0.24)
-		var eye_mat = StandardMaterial3D.new()
-		eye_mat.albedo_color = Color(0.01, 0.01, 0.01)
-		eye_mat.emission_enabled = true
-		eye_mat.emission = Color(0.0, 0.0, 0.0)
-		eye_mat.roughness = 0.1
-		emi.material_override = eye_mat
-		body.add_child(emi)
+	# Anatomical Y-coordinates (yurei stands upright, not stretched).
+	# Origin at the feet; total height ~1.70 m.
+	var foot_y       := 0.08
+	var ankle_y      := 0.10
+	var knee_y       := 0.46
+	var hip_y        := 0.90
+	var waist_y      := 1.08
+	var chest_y      := 1.36
+	var shoulder_y   := 1.50
+	var neck_y       := 1.56
+	var head_y       := 1.72
 
-	# Mouth (dark open slit)
-	var mm = BoxMesh.new()
-	mm.size = Vector3(0.13, 0.05, 0.02)
-	var mmi = MeshInstance3D.new()
-	mmi.mesh = mm; mmi.position = Vector3(0, 1.55, 0.26)
-	var mouth_mat = StandardMaterial3D.new()
-	mouth_mat.albedo_color = Color(0.03, 0.02, 0.02)
-	mouth_mat.roughness = 0.9
-	mmi.material_override = mouth_mat
-	body.add_child(mmi)
+	# Head — slightly oval (squashed along X) so it reads as a face.
+	var head := _make_sphere(0.115, Vector3(0, head_y, 0), ghost, Vector3.ZERO)
+	head.scale = Vector3(0.95, 1.05, 1.00)
+	body.add_child(head)
+	# Jaw / chin
+	body.add_child(_make_sphere(0.058, Vector3(0, head_y - 0.075, 0.060), ghost, Vector3.ZERO))
+
+	# Hair cap (back of head)
+	body.add_child(_make_sphere(0.128, Vector3(0, head_y + 0.020, -0.015), hair_mat, Vector3.ZERO))
+
+	# Long flowing hair down the back — two stacked capsules
+	body.add_child(_make_capsule(0.130, 0.85, Vector3(0, head_y - 0.50, -0.12), hair_mat, Vector3.ZERO))
+	body.add_child(_make_capsule(0.100, 0.55, Vector3(0, head_y - 1.10, -0.08), hair_mat, Vector3.ZERO))
+
+	# Hair front curtain — partially covers the face (classic yurei look)
+	var hair_front := MeshInstance3D.new()
+	var hfm := BoxMesh.new()
+	hfm.size = Vector3(0.20, 0.30, 0.018)
+	hair_front.mesh = hfm
+	hair_front.position = Vector3(0, head_y - 0.02, 0.110)
+	hair_front.material_override = hair_mat
+	body.add_child(hair_front)
+
+	# Eye sockets — hollow black holes barely visible under the hair
+	for side: float in [-1.0, 1.0]:
+		var eye := MeshInstance3D.new()
+		var em := SphereMesh.new()
+		em.radius = 0.038
+		em.height = 0.076
+		eye.mesh = em
+		eye.position = Vector3(side * 0.060, head_y + 0.015, 0.105)
+		eye.material_override = dark_mat
+		body.add_child(eye)
+
+	# Slack open mouth
+	var mouth := MeshInstance3D.new()
+	var mm := BoxMesh.new()
+	mm.size = Vector3(0.055, 0.038, 0.018)
+	mouth.mesh = mm
+	mouth.position = Vector3(0, head_y - 0.08, 0.115)
+	mouth.material_override = dark_mat
+	body.add_child(mouth)
+
+	# Neck + throat sphere
+	body.add_child(_make_capsule(0.052, 0.14, Vector3(0, neck_y, 0), ghost, Vector3.ZERO))
+	body.add_child(_make_sphere(0.075, Vector3(0, shoulder_y - 0.02, 0.0), ghost, Vector3.ZERO))
+
+	# Torso — chest, waist, hips (three tapered capsules)
+	body.add_child(_make_capsule(0.155, 0.30, Vector3(0, chest_y, 0), ghost_cloth, Vector3.ZERO))
+	body.add_child(_make_capsule(0.130, 0.22, Vector3(0, waist_y - 0.04, 0), ghost_cloth, Vector3.ZERO))
+	body.add_child(_make_capsule(0.170, 0.18, Vector3(0, hip_y + 0.02, 0), ghost_cloth, Vector3.ZERO))
+
+	# Shoulder spheres
+	for side: float in [-1.0, 1.0]:
+		body.add_child(_make_sphere(0.072, Vector3(side * 0.165, shoulder_y - 0.04, 0.0), ghost_cloth, Vector3.ZERO))
+
+	# Arms — upper arm, elbow, forearm, wrist, hand
+	for side: float in [-1.0, 1.0]:
+		var sh_x := side * 0.180
+		body.add_child(_make_capsule(0.055, 0.28, Vector3(sh_x, 1.22, 0.0), ghost_cloth, Vector3.ZERO))
+		body.add_child(_make_sphere(0.055, Vector3(sh_x, 1.06, 0.005), ghost, Vector3.ZERO))
+		body.add_child(_make_capsule(0.045, 0.26, Vector3(sh_x + side * 0.005, 0.90, 0.012), ghost, Vector3.ZERO))
+		body.add_child(_make_sphere(0.042, Vector3(sh_x + side * 0.005, 0.76, 0.020), ghost, Vector3.ZERO))
+		# Hand — flattened sphere, slightly curled
+		var hand := MeshInstance3D.new()
+		var hm := SphereMesh.new()
+		hm.radius = 0.050
+		hm.height = 0.100
+		hand.mesh = hm
+		hand.scale = Vector3(0.78, 1.20, 0.95)
+		hand.position = Vector3(sh_x + side * 0.007, 0.68, 0.025)
+		hand.material_override = ghost
+		body.add_child(hand)
+
+	# Legs — kimono skirt over thigh, bare ghostly shin, foot.
+	# Traditional yurei imagery shows feet trailing into mist — here we
+	# show real feet for definition, but offset them slightly inward so
+	# the silhouette tapers downward.
+	for side: float in [-1.0, 1.0]:
+		var lg_x := side * 0.080
+		body.add_child(_make_capsule(0.100, 0.34, Vector3(lg_x, hip_y - 0.22, 0.0), ghost_cloth, Vector3.ZERO))
+		body.add_child(_make_sphere(0.075, Vector3(lg_x, knee_y - 0.02, 0.005), ghost_cloth, Vector3.ZERO))
+		body.add_child(_make_capsule(0.058, 0.34, Vector3(lg_x, knee_y - 0.20, 0.010), ghost, Vector3.ZERO))
+		body.add_child(_make_sphere(0.048, Vector3(lg_x, ankle_y + 0.04, 0.015), ghost, Vector3.ZERO))
+		# Foot — flat, slightly forward
+		var foot := MeshInstance3D.new()
+		var fm := SphereMesh.new()
+		fm.radius = 0.058
+		fm.height = 0.116
+		foot.mesh = fm
+		foot.scale = Vector3(1.0, 0.55, 1.60)
+		foot.position = Vector3(lg_x, foot_y, 0.055)
+		foot.material_override = ghost
+		body.add_child(foot)
+
+# ── Anatomy helpers — same shape as HangingCorpse so the silhouettes match ──
+
+func _make_capsule(radius: float, height: float, pos: Vector3,
+		mat: Material, rot_deg: Vector3) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var cm := CapsuleMesh.new()
+	cm.radius = radius
+	cm.height = height
+	mi.mesh = cm
+	mi.position = pos
+	mi.rotation_degrees = rot_deg
+	mi.material_override = mat
+	return mi
+
+func _make_sphere(radius: float, pos: Vector3,
+		mat: Material, rot_deg: Vector3) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var sm := SphereMesh.new()
+	sm.radius = radius
+	sm.height = radius * 2.0
+	mi.mesh = sm
+	mi.position = pos
+	mi.rotation_degrees = rot_deg
+	mi.material_override = mat
+	return mi
 
 func _ghost_mat(col: Color, alpha: float) -> ShaderMaterial:
 	var m = ShaderMaterial.new()
@@ -277,4 +378,6 @@ func _ghost_mat(col: Color, alpha: float) -> ShaderMaterial:
 	m.set_shader_parameter("distort_speed", 0.7)
 	m.set_shader_parameter("distort_amount", 0.016)
 	m.set_shader_parameter("flicker_speed", 3.8)
+	m.set_shader_parameter("body_glow", 0.55)
+	m.set_shader_parameter("rim_bleed", 1.2)
 	return m

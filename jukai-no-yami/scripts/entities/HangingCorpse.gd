@@ -209,34 +209,27 @@ func _resolve_encounter() -> void:
 # translucent ghost-shader HangingSpirit — this is a body.
 
 func _build_corpse() -> void:
-	# Female hanging victim — primary body parts use the corpse_anomaly
-	# shader so the corpse reads as a "stuttering energy anomaly" rather
-	# than a smooth cylinder stack. Auxiliary props (rope, noose, pebbles)
-	# stay physical so the scene still has tangible grounding.
-	var anomaly := load("res://shaders/corpse_anomaly.gdshader") as Shader
+	# Female hanging victim — proper humanoid anatomy out of primitives.
+	# Body is built around an internal skeleton: feet → shins → knees →
+	# thighs → hips → waist → chest → shoulders → neck → head, plus arms
+	# split into upper arm → elbow → forearm → wrist → hand. Each joint
+	# uses a small sphere to soften the cylinder transitions so the body
+	# no longer reads as "stacked cylinders".
+	#
+	# The CORPSE uses StandardMaterial3D (real dead body). The ghost that
+	# spawns from it uses the corpse_anomaly shader (see YureiEntity).
 
-	var skin := ShaderMaterial.new()
-	skin.shader = anomaly
-	# Anomaly tone for the skin — bone-pale with a faint cool tint.
-	skin.set_shader_parameter("anomaly_color", Color(0.78, 0.82, 0.88, 0.92))
-	skin.set_shader_parameter("jitter_freq", 5.4)
-	skin.set_shader_parameter("jitter_amp", 0.008)
-	skin.set_shader_parameter("rim_exponent", 1.8)
-	skin.set_shader_parameter("core_alpha", 0.28)
-	skin.set_shader_parameter("rim_bleed", 1.5)
+	var skin := StandardMaterial3D.new()
+	skin.albedo_color = Color(0.56, 0.52, 0.50)        # death pallor — warm grey
+	skin.roughness = 0.94
+	skin.metallic_specular = 0.04
 
-	var kimono_mat := ShaderMaterial.new()
-	kimono_mat.shader = anomaly
-	# Kimono — warmer off-white, more cloth ripple
-	kimono_mat.set_shader_parameter("anomaly_color", Color(0.66, 0.66, 0.62, 0.86))
-	kimono_mat.set_shader_parameter("jitter_freq", 6.5)
-	kimono_mat.set_shader_parameter("jitter_amp", 0.018)
-	kimono_mat.set_shader_parameter("rim_exponent", 1.6)
-	kimono_mat.set_shader_parameter("core_alpha", 0.22)
-	kimono_mat.set_shader_parameter("rim_bleed", 1.6)
+	var kimono_mat := StandardMaterial3D.new()
+	kimono_mat.albedo_color = Color(0.48, 0.46, 0.42)  # soiled off-white
+	kimono_mat.roughness = 0.96
 
 	var sash_mat := StandardMaterial3D.new()
-	sash_mat.albedo_color = Color(0.42, 0.10, 0.10)     # dark red obi
+	sash_mat.albedo_color = Color(0.36, 0.08, 0.08)    # dark red obi
 	sash_mat.roughness = 0.88
 
 	var rope_mat := StandardMaterial3D.new()
@@ -251,177 +244,199 @@ func _build_corpse() -> void:
 	hair_mat.albedo_color = Color(0.05, 0.03, 0.04)
 	hair_mat.roughness = 0.94
 
-	# Feet at y=0.65, head/neck at y=2.45, branch at y=hang_height
-	var foot_y := 0.65
-	var neck_y := 2.30
-	var head_y := 2.50
+	# ── Anatomical landmark Y-coordinates (metres above origin) ───────────
+	# Feet hang above ground (the corpse is suspended). Body is stretched
+	# slightly by the hanging — heights are ~5% taller than living.
+	var foot_y       := 0.55
+	var ankle_y      := 0.65
+	var knee_y       := 1.05
+	var hip_y        := 1.47
+	var waist_y      := 1.66
+	var chest_y      := 1.96
+	var shoulder_y   := 2.10
+	var neck_y       := 2.16
+	var head_y       := 2.32
 
-	# Rope from branch down to noose
+	# ── Hanging rope (branch → noose) ─────────────────────────────────────
 	var rope := MeshInstance3D.new()
 	var rm := CylinderMesh.new()
 	rm.top_radius = 0.022
 	rm.bottom_radius = 0.022
-	rm.height = hang_height - neck_y
+	rm.height = hang_height - (neck_y + 0.06)
 	rope.mesh = rm
-	rope.position = Vector3(0, (hang_height + neck_y) * 0.5, 0)
+	rope.position = Vector3(0, (hang_height + neck_y + 0.06) * 0.5, 0)
 	rope.material_override = rope_mat
 	add_child(rope)
 
 	# Noose loop — torus around the throat
 	var noose := MeshInstance3D.new()
 	var nm := TorusMesh.new()
-	nm.inner_radius = 0.10
-	nm.outer_radius = 0.14
-	nm.ring_segments = 12
-	nm.rings = 16
+	nm.inner_radius = 0.075
+	nm.outer_radius = 0.115
+	nm.ring_segments = 14
+	nm.rings = 18
 	noose.mesh = nm
-	noose.position = Vector3(0, neck_y + 0.05, 0)
+	noose.position = Vector3(0, neck_y + 0.04, 0)
 	noose.material_override = rope_mat
 	add_child(noose)
 
-	# Neck — slim, slightly stretched from the hanging
-	var neck := MeshInstance3D.new()
-	var nkm := CylinderMesh.new()
-	nkm.top_radius = 0.055
-	nkm.bottom_radius = 0.075
-	nkm.height = 0.22
-	neck.mesh = nkm
-	neck.position = Vector3(0, neck_y, 0)
-	neck.material_override = skin
-	add_child(neck)
-
-	# Head — pale, tilted to the side
-	var head := MeshInstance3D.new()
-	var hm := SphereMesh.new()
-	hm.radius = 0.15
-	hm.height = 0.30
-	head.mesh = hm
-	head.position = Vector3(0.06, head_y, 0.03)
-	head.rotation_degrees = Vector3(6.0, 14.0, 24.0)
-	head.material_override = skin
+	# ── HEAD ──────────────────────────────────────────────────────────────
+	# Slightly oval head (X squashed) tilted from the broken neck.
+	var head_tilt := Vector3(4.0, 12.0, 22.0)
+	var head_offset := Vector3(0.06, head_y, 0.02)
+	var head := _make_sphere(0.115, head_offset, skin, head_tilt)
+	# Squash head slightly along X so it has a face profile instead of
+	# being a perfect ball.
+	head.scale = Vector3(0.95, 1.05, 1.00)
 	add_child(head)
 
-	# Long flowing dark hair — back of head, draping down to mid-back.
-	# Built as two pieces: a cap above the head and a long curtain behind.
-	var hair_top := MeshInstance3D.new()
-	var hair_top_m := SphereMesh.new()
-	hair_top_m.radius = 0.155
-	hair_top_m.height = 0.24
-	hair_top.mesh = hair_top_m
-	hair_top.position = Vector3(0.06, head_y + 0.04, 0.0)
-	hair_top.rotation_degrees = head.rotation_degrees
-	hair_top.material_override = hair_mat
-	add_child(hair_top)
+	# Jaw / chin — small extra sphere forward-down from head centre
+	add_child(_make_sphere(0.058, head_offset + _rot_offset(Vector3(0.0, -0.075, 0.060), head_tilt),
+		skin, head_tilt))
 
-	var hair_long := MeshInstance3D.new()
-	var hair_long_m := CapsuleMesh.new()
-	hair_long_m.radius = 0.17
-	hair_long_m.height = 1.15
-	hair_long.mesh = hair_long_m
-	hair_long.position = Vector3(0.04, head_y - 0.55, -0.10)
-	hair_long.rotation_degrees = Vector3(0, 0, 6.0)
-	hair_long.material_override = hair_mat
-	add_child(hair_long)
+	# Hair cap — covers top + back of head
+	var hair_cap := _make_sphere(0.128, head_offset + Vector3(0.0, 0.020, -0.015), hair_mat, head_tilt)
+	add_child(hair_cap)
 
-	# Hair front curtain — partially covers the face (classic yurei look)
+	# Long flowing hair down the back — two stacked capsules for volume
+	var hair_back := _make_capsule(0.13, 0.85,
+		Vector3(head_offset.x - 0.01, head_y - 0.50, head_offset.z - 0.12),
+		hair_mat, Vector3(-4.0, 0.0, 4.0))
+	add_child(hair_back)
+	var hair_back2 := _make_capsule(0.10, 0.55,
+		Vector3(head_offset.x - 0.02, head_y - 1.10, head_offset.z - 0.08),
+		hair_mat, Vector3(0.0, 0.0, 2.0))
+	add_child(hair_back2)
+
+	# Front face-curtain hair — falls over the right side of the face
 	var hair_front := MeshInstance3D.new()
 	var hfm := BoxMesh.new()
-	hfm.size = Vector3(0.28, 0.34, 0.03)
+	hfm.size = Vector3(0.18, 0.28, 0.018)
 	hair_front.mesh = hfm
-	hair_front.position = Vector3(0.06, head_y - 0.04, 0.14)
-	hair_front.rotation_degrees = head.rotation_degrees
+	hair_front.position = head_offset + _rot_offset(Vector3(0.05, -0.05, 0.105), head_tilt)
+	hair_front.rotation_degrees = head_tilt
 	hair_front.material_override = hair_mat
 	add_child(hair_front)
 
-	# Slack open mouth — barely visible under the hair curtain
+	# Slack open mouth visible under the hair
 	var mouth := MeshInstance3D.new()
 	var mm := BoxMesh.new()
-	mm.size = Vector3(0.05, 0.04, 0.018)
+	mm.size = Vector3(0.040, 0.032, 0.014)
 	mouth.mesh = mm
-	mouth.position = Vector3(0.065, head_y - 0.10, 0.16)
-	mouth.rotation_degrees = head.rotation_degrees
+	mouth.position = head_offset + _rot_offset(Vector3(0.005, -0.07, 0.118), head_tilt)
+	mouth.rotation_degrees = head_tilt
 	mouth.material_override = dark_mat
 	add_child(mouth)
 
-	# Torso — narrower than male, wearing the kimono top
-	var torso := MeshInstance3D.new()
-	var tm := CapsuleMesh.new()
-	tm.radius = 0.20
-	tm.height = 0.75
-	torso.mesh = tm
-	torso.position = Vector3(0, 1.78, 0)
-	torso.material_override = kimono_mat
-	add_child(torso)
+	# ── NECK ──────────────────────────────────────────────────────────────
+	# Thin slightly-stretched cylinder, with a sphere at the base for the
+	# clavicle/throat transition.
+	var neck := _make_capsule(0.052, 0.16, Vector3(0.02, neck_y, 0.0), skin, Vector3.ZERO)
+	add_child(neck)
+	add_child(_make_sphere(0.075, Vector3(0.0, shoulder_y - 0.02, 0.0), skin, Vector3.ZERO))
 
-	# Dark-red obi (sash) around the waist
+	# ── TORSO: chest + waist + hips ───────────────────────────────────────
+	# Three stacked tapered capsules give a proper female torso silhouette:
+	# chest is wider, waist tucks in, hips flare slightly. Kimono cloth
+	# wraps the whole thing — built as a slightly larger overlay capsule.
+	add_child(_make_capsule(0.165, 0.30, Vector3(0, chest_y, 0), kimono_mat, Vector3.ZERO))   # chest
+	add_child(_make_capsule(0.140, 0.22, Vector3(0, waist_y - 0.04, 0), kimono_mat, Vector3.ZERO))  # waist
+	add_child(_make_capsule(0.180, 0.18, Vector3(0, hip_y + 0.02, 0), kimono_mat, Vector3.ZERO))   # hips
+
+	# Shoulder spheres — connect chest to upper arms
+	for side: float in [-1.0, 1.0]:
+		add_child(_make_sphere(0.075, Vector3(side * 0.175, shoulder_y - 0.04, 0.0), kimono_mat, Vector3.ZERO))
+
+	# Dark-red obi sash at waist line
 	var obi := MeshInstance3D.new()
 	var obim := CylinderMesh.new()
-	obim.top_radius = 0.22
-	obim.bottom_radius = 0.22
-	obim.height = 0.16
+	obim.top_radius = 0.165
+	obim.bottom_radius = 0.165
+	obim.height = 0.14
 	obi.mesh = obim
-	obi.position = Vector3(0, 1.40, 0)
+	obi.position = Vector3(0, waist_y + 0.03, 0)
 	obi.material_override = sash_mat
 	add_child(obi)
 
-	# Long kimono skirt — single flowing piece down to the feet
-	var skirt := MeshInstance3D.new()
-	var skm := CylinderMesh.new()
-	skm.top_radius = 0.20
-	skm.bottom_radius = 0.34
-	skm.height = 0.92
-	skm.radial_segments = 16
-	skirt.mesh = skm
-	skirt.position = Vector3(0, 0.88, 0)
-	skirt.material_override = kimono_mat
-	add_child(skirt)
+	# Obi bow at the back
+	add_child(_make_sphere(0.10, Vector3(0, waist_y + 0.04, -0.16), sash_mat, Vector3(0.0, 0.0, 0.0)))
 
-	# Arms — slim, hanging at sides with sleeves
+	# ── ARMS (upper arm → elbow → forearm → wrist → hand) ─────────────────
 	for side: float in [-1.0, 1.0]:
-		var shoulder_x := side * 0.18
-		var arm_upper := MeshInstance3D.new()
-		var aum := CapsuleMesh.new()
-		aum.radius = 0.062
-		aum.height = 0.46
-		arm_upper.mesh = aum
-		arm_upper.position = Vector3(shoulder_x, 1.78, 0)
-		arm_upper.material_override = kimono_mat
-		add_child(arm_upper)
-
-		var arm_lower := MeshInstance3D.new()
-		var alm := CapsuleMesh.new()
-		alm.radius = 0.052
-		alm.height = 0.44
-		arm_lower.mesh = alm
-		arm_lower.position = Vector3(shoulder_x, 1.30, 0.02)
-		arm_lower.material_override = skin
-		add_child(arm_lower)
-
-		# Pale hand at the end of the sleeve — slightly curled
+		var shoulder_x := side * 0.19
+		# Upper arm — slight outward angle from shoulder
+		var upper_arm := _make_capsule(0.058, 0.28,
+			Vector3(shoulder_x + side * 0.005, 1.78, 0.0), kimono_mat,
+			Vector3(0.0, 0.0, -side * 4.0))
+		add_child(upper_arm)
+		# Elbow joint
+		add_child(_make_sphere(0.058, Vector3(shoulder_x + side * 0.015, 1.62, 0.005), skin, Vector3.ZERO))
+		# Forearm — bare skin (sleeves end at elbow on this kimono)
+		var forearm := _make_capsule(0.048, 0.26,
+			Vector3(shoulder_x + side * 0.018, 1.45, 0.012), skin,
+			Vector3(0.0, 0.0, -side * 2.0))
+		add_child(forearm)
+		# Wrist joint
+		add_child(_make_sphere(0.045, Vector3(shoulder_x + side * 0.022, 1.30, 0.020), skin, Vector3.ZERO))
+		# Hand — small flattened sphere, slightly curled inward
 		var hand := MeshInstance3D.new()
 		var hand_m := SphereMesh.new()
-		hand_m.radius = 0.048
-		hand_m.height = 0.096
+		hand_m.radius = 0.055
+		hand_m.height = 0.110
 		hand.mesh = hand_m
-		hand.position = Vector3(shoulder_x, 1.07, 0.02)
+		hand.scale = Vector3(0.78, 1.20, 0.95)
+		hand.position = Vector3(shoulder_x + side * 0.026, 1.22, 0.025)
 		hand.material_override = skin
 		add_child(hand)
 
-	# Bare pale feet poking out under the kimono hem
+	# ── LEGS (thigh → knee → shin → ankle → foot) ─────────────────────────
+	# Legs dangle straight down with a very slight outward splay. Kimono
+	# skirt wraps the thighs; shins are visible bare; feet hang limp.
 	for side: float in [-1.0, 1.0]:
+		var leg_x := side * 0.085
+		# Kimono skirt section wrapping the thigh
+		var thigh := _make_capsule(0.105, 0.34,
+			Vector3(leg_x + side * 0.008, hip_y - 0.21, 0.0), kimono_mat,
+			Vector3(0.0, 0.0, -side * 2.0))
+		add_child(thigh)
+		# Knee joint
+		add_child(_make_sphere(0.078, Vector3(leg_x + side * 0.012, knee_y - 0.02, 0.005), kimono_mat, Vector3.ZERO))
+		# Lower shin — bare pale skin showing under the hem
+		var shin := _make_capsule(0.062, 0.34,
+			Vector3(leg_x + side * 0.014, knee_y - 0.20, 0.010), skin,
+			Vector3(0.0, 0.0, -side * 1.0))
+		add_child(shin)
+		# Ankle joint
+		add_child(_make_sphere(0.052, Vector3(leg_x + side * 0.014, ankle_y, 0.015), skin, Vector3.ZERO))
+		# Foot — flattened sphere pointing slightly forward
 		var foot := MeshInstance3D.new()
 		var fm := SphereMesh.new()
-		fm.radius = 0.058
-		fm.height = 0.10
+		fm.radius = 0.062
+		fm.height = 0.124
 		foot.mesh = fm
-		foot.position = Vector3(side * 0.10, foot_y, 0.05)
+		foot.scale = Vector3(1.0, 0.55, 1.65)
+		foot.position = Vector3(leg_x + side * 0.014, foot_y, 0.060)
 		foot.material_override = skin
 		add_child(foot)
 
-	# Memorial pebbles at the foot of the body — visitors / mourners
-	# scattered them. Small touch of in-world history.
+	# Kimono hem at the bottom of the skirt — narrow band of darker fabric
+	for side: float in [-1.0, 1.0]:
+		var hem_band := MeshInstance3D.new()
+		var hbm := CylinderMesh.new()
+		hbm.top_radius = 0.116
+		hbm.bottom_radius = 0.108
+		hbm.height = 0.04
+		hem_band.mesh = hbm
+		hem_band.position = Vector3(side * 0.090, knee_y + 0.02, 0.0)
+		var hem_mat := StandardMaterial3D.new()
+		hem_mat.albedo_color = Color(0.30, 0.28, 0.24)
+		hem_mat.roughness = 0.98
+		hem_band.material_override = hem_mat
+		add_child(hem_band)
+
+	# Memorial pebbles at the foot of the body
 	var pebble_mat := StandardMaterial3D.new()
-	pebble_mat.albedo_color = Color(0.36, 0.36, 0.38)
+	pebble_mat.albedo_color = Color(0.32, 0.32, 0.34)
 	pebble_mat.roughness = 0.94
 	for i in 5:
 		var pebble := MeshInstance3D.new()
@@ -436,6 +451,48 @@ func _build_corpse() -> void:
 		add_child(pebble)
 
 	_start_sway()
+
+
+# ── Anatomy helpers ──────────────────────────────────────────────────────
+
+# Build a CapsuleMesh — used everywhere a limb segment is needed.
+# height is the TOTAL height including the two spherical caps.
+func _make_capsule(radius: float, height: float, pos: Vector3,
+		mat: Material, rot_deg: Vector3) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var cm := CapsuleMesh.new()
+	cm.radius = radius
+	cm.height = height
+	mi.mesh = cm
+	mi.position = pos
+	mi.rotation_degrees = rot_deg
+	mi.material_override = mat
+	return mi
+
+
+# Build a SphereMesh — used for joints (shoulders, elbows, knees, ankles).
+func _make_sphere(radius: float, pos: Vector3,
+		mat: Material, rot_deg: Vector3) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var sm := SphereMesh.new()
+	sm.radius = radius
+	sm.height = radius * 2.0
+	mi.mesh = sm
+	mi.position = pos
+	mi.rotation_degrees = rot_deg
+	mi.material_override = mat
+	return mi
+
+
+# Rotate a local offset by a Euler-degree rotation. Used for placing
+# features on the head (eyes, mouth, jaw) that should move with the head's
+# tilt rather than staying in world-axis space.
+func _rot_offset(local: Vector3, euler_deg: Vector3) -> Vector3:
+	var b := Basis.from_euler(Vector3(
+		deg_to_rad(euler_deg.x),
+		deg_to_rad(euler_deg.y),
+		deg_to_rad(euler_deg.z)))
+	return b * local
 
 
 func _start_sway() -> void:
