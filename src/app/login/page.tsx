@@ -9,6 +9,7 @@ export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [totp, setTotp] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -16,9 +17,9 @@ export default function LoginPage() {
     e.preventDefault();
     setBusy(true);
     setError(null);
-    const res = await signIn("credentials", { email, password, redirect: false });
+    const res = await signIn("credentials", { email, password, totp, redirect: false });
     setBusy(false);
-    if (res?.error) setError("Invalid email or password");
+    if (res?.error) setError("Invalid credentials (or missing/wrong 2FA code)");
     else router.push("/");
   };
 
@@ -52,6 +53,19 @@ export default function LoginPage() {
               onChange={(e) => setPassword(e.target.value)}
               required
               autoComplete="current-password"
+            />
+          </div>
+          <div>
+            <label className="stat-label block mb-1.5">2FA code (if enabled)</label>
+            <input
+              className="input"
+              type="text"
+              inputMode="numeric"
+              maxLength={6}
+              value={totp}
+              onChange={(e) => setTotp(e.target.value)}
+              placeholder="123456"
+              autoComplete="one-time-code"
             />
           </div>
           {error && <p className="text-loss text-sm">{error}</p>}

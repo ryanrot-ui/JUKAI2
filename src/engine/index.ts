@@ -1,8 +1,10 @@
 import { Connection, Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { redis, KEYS } from "@/lib/redis";
 import { decryptSecret } from "@/lib/crypto";
+import { validateEnv, rpcEndpoints } from "@/lib/env";
 import {
   collectMetrics,
   forgetToken,
@@ -10,12 +12,21 @@ import {
   getSolPriceUsd,
   getTokenPriceUsd,
 } from "./analysis/collectors";
-import { scoreToken } from "./analysis/scoring";
+import { scoreToken, DEFAULT_WEIGHTS } from "./analysis/scoring";
 import { MigrationScanner, type MigrationEvent } from "./scanner/migrationScanner";
 import { evaluateBuyRules } from "./trading/rules";
 import { checkRisk } from "./trading/riskManager";
 import { evaluateExit } from "./trading/exitRules";
-import { LiveExecutor, PaperExecutor, type Executor } from "./trading/executor";
+import {
+  LiveExecutor,
+  PaperExecutor,
+  SwapUncertainError,
+  getWalletSolBalance,
+  getWalletTokenBalance,
+  type Executor,
+  type SwapResult,
+} from "./trading/executor";
+import { AsyncLock, withRetries } from "./utils/concurrency";
 import { LiveConfig } from "./config";
 import { logger } from "./logging/logger";
 import { notify } from "./notify";
@@ -26,19 +37,27 @@ import { notify } from "./notify";
  *
  * Lifecycle:
  *   scanner detects migration → token joins the watchlist → evaluated every
- *   EVAL_INTERVAL until WATCH_WINDOW expires → if score + rules + risk all
- *   pass, buy → position monitored every MONITOR_INTERVAL until an exit rule
- *   fires.
+ *   scannerIntervalSec until WATCH_WINDOW expires → if score + rules + risk
+ *   all pass, a position is *reserved* under a lock (DB-unique openKey makes
+ *   duplicate buys impossible), then the swap executes → the position is
+ *   monitored every MONITOR_INTERVAL until an exit rule fires.
  *
- * Crash recovery: open positions and the watchlist are persisted in Postgres
- * and reloaded on startup; the scanner's polling fallback re-detects
- * migrations missed while down.
+ * Reliability:
+ *   - RPC failover across SOLANA_RPC_URL + SOLANA_RPC_URLS with a health probe
+ *   - scanner WebSocket watchdog + polling fallback
+ *   - crash recovery: watchlist & open positions rebuilt from Postgres on boot
+ *   - swap retries only when the previous attempt provably did NOT land
+ *   - live-mode wallet desync recovery before every sell
+ *   - nightly archival of old scanner data
  */
 
-const EVAL_INTERVAL_MS = 15_000;
 const MONITOR_INTERVAL_MS = 5_000;
+const HEALTH_INTERVAL_MS = 10_000;
+const ARCHIVE_INTERVAL_MS = 6 * 60 * 60_000;
 const WATCH_WINDOW_MS = 45 * 60_000; // stop evaluating tokens older than this
 const MIN_AGE_BEFORE_BUY_S = 90; // let post-migration chaos settle first
+const ARCHIVE_AFTER_DAYS = parseInt(process.env.ARCHIVE_AFTER_DAYS ?? "14", 10);
+const RPC_FAIL_THRESHOLD = 3; // consecutive health-probe failures → failover
 
 interface WatchedToken {
   tokenId: string;
@@ -48,18 +67,23 @@ interface WatchedToken {
 }
 
 class TradingEngine {
-  private conn = new Connection(process.env.SOLANA_RPC_URL ?? "https://api.mainnet-beta.solana.com", {
-    wsEndpoint: process.env.SOLANA_WS_URL,
-    commitment: "confirmed",
-  });
+  private rpcUrls = rpcEndpoints();
+  private rpcIndex = 0;
+  private rpcFailures = 0;
+  private conn = this.makeConnection();
+
   private config = new LiveConfig();
   private scanner: MigrationScanner;
   private control = redis.duplicate();
   private watchlist = new Map<string, WatchedToken>();
-  private buying = new Set<string>(); // in-flight buy locks (duplicate guard)
+  private buyLock = new AsyncLock(); // serializes risk-check + reservation
   private selling = new Set<string>();
+  private rejectedOnce = new Set<string>(); // daily-stats dedupe
+  private scanTimestamps: number[] = []; // for scans/min health metric
   private emergencyStopped = false;
   private timers: NodeJS.Timeout[] = [];
+  private evalTimer: NodeJS.Timeout | null = null;
+  private lastTradeAt: number | null = null;
 
   constructor() {
     this.scanner = new MigrationScanner(
@@ -69,10 +93,18 @@ class TradingEngine {
     );
   }
 
+  private makeConnection(): Connection {
+    const url = this.rpcUrls[this.rpcIndex];
+    return new Connection(url, {
+      wsEndpoint: this.rpcIndex === 0 ? process.env.SOLANA_WS_URL : undefined,
+      commitment: "confirmed",
+    });
+  }
+
   // ── lifecycle ─────────────────────────────────────────────────────────────
 
   async start(): Promise<void> {
-    logger.info("engine", "starting trading engine");
+    logger.info("engine", `starting trading engine (rpc: ${this.rpcUrls[0]}, ${this.rpcUrls.length} endpoint(s))`);
     await this.config.start();
 
     // Crash recovery: resume open positions and recent unresolved tokens
@@ -97,8 +129,10 @@ class TradingEngine {
     await this.control.subscribe(KEYS.controlChannel);
     this.control.on("message", (_ch, msg) => this.onControl(msg));
 
-    this.timers.push(setInterval(() => void this.evaluateWatchlist(), EVAL_INTERVAL_MS));
+    this.scheduleEvalLoop();
     this.timers.push(setInterval(() => void this.monitorPositions(), MONITOR_INTERVAL_MS));
+    this.timers.push(setInterval(() => void this.publishHealth(), HEALTH_INTERVAL_MS));
+    this.timers.push(setInterval(() => void this.archiveOldData(), ARCHIVE_INTERVAL_MS));
     this.timers.push(
       setInterval(() => void redis.set(KEYS.botHeartbeat, Date.now().toString()).catch(() => {}), 5_000)
     );
@@ -108,11 +142,25 @@ class TradingEngine {
 
   async stop(): Promise<void> {
     this.timers.forEach(clearInterval);
+    if (this.evalTimer) clearTimeout(this.evalTimer);
     await this.scanner.stop();
     await this.config.stop();
     await redis.set(KEYS.botStatus, "stopped").catch(() => {});
     this.control.disconnect();
     logger.info("engine", "engine stopped");
+  }
+
+  /** Self-scheduling evaluation loop so scannerIntervalSec hot-reloads. */
+  private scheduleEvalLoop(): void {
+    const intervalMs = this.config.get().scannerIntervalSec * 1000;
+    this.evalTimer = setTimeout(async () => {
+      try {
+        await this.evaluateWatchlist();
+      } catch (e) {
+        logger.exception("engine", "evaluation loop failed", e);
+      }
+      this.scheduleEvalLoop();
+    }, intervalMs);
   }
 
   private onControl(msg: string): void {
@@ -126,6 +174,53 @@ class TradingEngine {
       void redis.set(KEYS.botStatus, "running");
       logger.info("engine", "resumed from emergency stop");
     }
+  }
+
+  // ── RPC health & failover ─────────────────────────────────────────────────
+
+  private async publishHealth(): Promise<void> {
+    let rpcLatencyMs: number | null = null;
+    const t0 = Date.now();
+    try {
+      await this.conn.getSlot("confirmed");
+      rpcLatencyMs = Date.now() - t0;
+      this.rpcFailures = 0;
+    } catch {
+      this.rpcFailures++;
+      logger.warn("engine", `RPC health probe failed (${this.rpcFailures}/${RPC_FAIL_THRESHOLD})`);
+      if (this.rpcFailures >= RPC_FAIL_THRESHOLD && this.rpcUrls.length > 1) {
+        await this.rotateRpc();
+      }
+    }
+
+    const cutoff = Date.now() - 60_000;
+    this.scanTimestamps = this.scanTimestamps.filter((t) => t > cutoff);
+    const mem = process.memoryUsage();
+
+    await redis
+      .hset("bot:health", {
+        at: Date.now().toString(),
+        rpcUrl: this.rpcUrls[this.rpcIndex],
+        rpcLatencyMs: rpcLatencyMs === null ? "" : rpcLatencyMs.toString(),
+        rpcFailures: this.rpcFailures.toString(),
+        scannerLastEventAt: this.scanner.lastActivityAt.toString(),
+        scansPerMin: this.scanTimestamps.length.toString(),
+        watchlistSize: this.watchlist.size.toString(),
+        lastTradeAt: this.lastTradeAt?.toString() ?? "",
+        rssMb: Math.round(mem.rss / 1024 / 1024).toString(),
+        heapMb: Math.round(mem.heapUsed / 1024 / 1024).toString(),
+      })
+      .catch(() => {});
+  }
+
+  private async rotateRpc(): Promise<void> {
+    this.rpcIndex = (this.rpcIndex + 1) % this.rpcUrls.length;
+    this.rpcFailures = 0;
+    this.conn = this.makeConnection();
+    this.liveExecutor = null; // rebuild against the new connection on demand
+    await this.scanner.setConnection(this.conn);
+    logger.warn("engine", `RPC failover → ${this.rpcUrls[this.rpcIndex]}`);
+    void notify("error", "RPC failover", `Switched to ${this.rpcUrls[this.rpcIndex]}`);
   }
 
   // ── scanning & evaluation ─────────────────────────────────────────────────
@@ -155,6 +250,11 @@ class TradingEngine {
     });
   }
 
+  /** Read-only mode: scan and score, but never execute anything. */
+  private async isReadOnly(): Promise<boolean> {
+    return (await redis.get("bot:readOnly").catch(() => null)) === "1";
+  }
+
   private async evaluateWatchlist(): Promise<void> {
     const settings = this.config.get();
     if (!settings.botEnabled || this.emergencyStopped) return;
@@ -169,6 +269,7 @@ class TradingEngine {
 
   private async evaluateToken(t: WatchedToken): Promise<void> {
     t.evaluating = true;
+    this.scanTimestamps.push(Date.now());
     try {
       const age = Date.now() - t.migratedAt.getTime();
       if (age > WATCH_WINDOW_MS) {
@@ -183,7 +284,8 @@ class TradingEngine {
 
       const settings = this.config.get();
       const metrics = await collectMetrics(this.conn, t.mint, t.migratedAt);
-      const score = scoreToken(metrics);
+      const weights = settings.scoringWeights ?? DEFAULT_WEIGHTS;
+      const score = scoreToken(metrics, weights);
 
       await prisma.$transaction([
         prisma.scoreRecord.create({
@@ -210,7 +312,7 @@ class TradingEngine {
         }),
         prisma.detectedToken.update({
           where: { id: t.tokenId },
-          data: { score: score.total },
+          data: { score: score.total, symbol: metrics.symbol ?? undefined },
         }),
       ]);
 
@@ -226,15 +328,28 @@ class TradingEngine {
           where: { id: t.tokenId },
           data: { verdict: "REJECTED", rejectionReasons: decision.reasons },
         });
+        if (!this.rejectedOnce.has(t.mint)) {
+          this.rejectedOnce.add(t.mint);
+          await this.bumpDaily({ rejected: 1 });
+          if (this.rejectedOnce.size > 10_000) this.rejectedOnce.clear();
+        }
         logger.debug("scoring", `rejected ${t.mint.slice(0, 8)}… (${score.total})`, {
           reasons: decision.reasons,
         });
         return;
       }
 
-      await this.tryBuy(t, metrics.priceUsd, score.total, decision.reasons);
+      await prisma.detectedToken.update({
+        where: { id: t.tokenId },
+        data: { verdict: "BUY_CANDIDATE" },
+      });
+      if (await this.isReadOnly()) {
+        logger.info("risk", `read-only mode: would have bought ${t.mint.slice(0, 8)}… (score ${score.total})`);
+        return;
+      }
+      await this.tryBuy(t, metrics.priceUsd, metrics.symbol, score.total, score.explanation, decision.reasons);
     } catch (e) {
-      logger.error("scoring", `evaluate ${t.mint.slice(0, 8)}… failed: ${(e as Error).message}`);
+      logger.exception("scoring", `evaluate ${t.mint.slice(0, 8)}… failed`, e);
     } finally {
       t.evaluating = false;
     }
@@ -245,77 +360,155 @@ class TradingEngine {
   private async tryBuy(
     t: WatchedToken,
     priceUsd: number | null,
+    symbol: string | null,
     score: number,
+    scoreExplanation: string,
     reasons: string[]
   ): Promise<void> {
-    if (this.buying.has(t.mint)) return; // duplicate guard
     const settings = this.config.get();
+    const entryReason = `score ${score}: ${reasons.join("; ")}`;
 
-    const existing = await prisma.position.findFirst({
-      where: { mint: t.mint, status: "OPEN" },
+    // Critical section: risk check + position reservation are serialized so
+    // concurrent evaluations can never over-commit exposure, and the
+    // DB-unique openKey makes a duplicate open position on this mint
+    // impossible even across engine restarts.
+    const reservation = await this.buyLock.run(async () => {
+      const risk = checkRisk(settings, await this.riskState());
+      if (!risk.allowed) {
+        logger.info("risk", `buy blocked for ${t.mint.slice(0, 8)}…`, { reasons: risk.reasons });
+        return null;
+      }
+
+      // Live-mode pre-trade validation: wallet must actually hold enough SOL
+      // (trade size + fee/rent headroom).
+      if (!settings.paperTrading) {
+        const executor = (await this.getExecutor(false)) as LiveExecutor;
+        const balance = await getWalletSolBalance(this.conn, executor.publicKey());
+        if (balance < risk.sizeSol + 0.01) {
+          logger.error("risk", `insufficient wallet balance: ${balance.toFixed(4)} SOL < ${risk.sizeSol} + fees`);
+          void notify("wallet_issue", "Insufficient balance", `Bot wallet has ${balance.toFixed(4)} SOL`);
+          return null;
+        }
+      }
+
+      try {
+        return await prisma.position.create({
+          data: {
+            mint: t.mint,
+            symbol,
+            openKey: t.mint, // unique while OPEN → duplicate-buy guard
+            status: "OPEN",
+            paper: settings.paperTrading,
+            entrySol: risk.sizeSol,
+            entryPriceUsd: priceUsd,
+            peakPriceUsd: priceUsd,
+            tokenQty: 0, // reserved; set after the swap fills
+            entryReason,
+            scannerScore: score,
+            scoreExplanation,
+          },
+        });
+      } catch (e) {
+        if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+          return null; // position already open for this mint — duplicate guard hit
+        }
+        throw e;
+      }
     });
-    if (existing) return;
+    if (!reservation) return;
 
-    const risk = checkRisk(settings, await this.riskState());
-    if (!risk.allowed) {
-      logger.info("risk", `buy blocked for ${t.mint.slice(0, 8)}…`, { reasons: risk.reasons });
-      return;
-    }
-
-    this.buying.add(t.mint);
+    const started = Date.now();
     try {
       const executor = await this.getExecutor(settings.paperTrading);
-      const entryReason = `score ${score}: ${reasons.join("; ")}`;
-      const result = await executor.buy(t.mint, risk.sizeSol, settings.maxSlippageBps);
-      // paper: UI token quantity; live: token base units (sold back in the same unit)
-      const tokenQty = result.outAmount;
+      const { result, attempts } = await withRetries<SwapResult>(
+        () =>
+          executor.buy(t.mint, reservation.entrySol, {
+            maxSlippageBps: settings.maxSlippageBps,
+            priorityFeeLamports: settings.priorityFeeLamports,
+          }),
+        {
+          retries: settings.retryCount,
+          // Only retry when the previous attempt provably did NOT land.
+          isRetryable: (err) => !(err instanceof SwapUncertainError),
+          onRetry: (err, attempt) =>
+            logger.warn("executor", `buy retry ${attempt} for ${t.mint.slice(0, 8)}…: ${(err as Error).message}`),
+        }
+      );
 
-      const position = await prisma.position.create({
-        data: {
-          mint: t.mint,
-          status: "OPEN",
-          paper: result.paper,
-          entrySol: risk.sizeSol,
-          entryPriceUsd: priceUsd,
-          peakPriceUsd: priceUsd,
-          tokenQty,
-          entryReason,
-        },
-      });
-      await prisma.trade.create({
-        data: {
-          tokenId: t.tokenId,
-          positionId: position.id,
-          side: "BUY",
-          paper: result.paper,
-          amountSol: risk.sizeSol,
-          tokenQty,
-          priceUsd,
-          signature: result.signature,
-          reason: entryReason,
-        },
-      });
-      await prisma.detectedToken.update({
-        where: { id: t.tokenId },
-        data: { verdict: "BOUGHT" },
-      });
+      const latencyMs = Date.now() - started;
+      await prisma.$transaction([
+        prisma.position.update({
+          where: { id: reservation.id },
+          data: { tokenQty: result.outAmount },
+        }),
+        prisma.trade.create({
+          data: {
+            tokenId: t.tokenId,
+            positionId: reservation.id,
+            side: "BUY",
+            paper: result.paper,
+            mint: t.mint,
+            symbol,
+            amountSol: reservation.entrySol,
+            tokenQty: result.outAmount,
+            priceUsd,
+            slippageBps: settings.maxSlippageBps,
+            signature: result.signature,
+            reason: entryReason,
+            latencyMs,
+            rpcUrl: this.rpcUrls[this.rpcIndex],
+            priorityFeeLamports: settings.priorityFeeLamports,
+            retries: attempts - 1,
+          },
+        }),
+        prisma.detectedToken.update({
+          where: { id: t.tokenId },
+          data: { verdict: "BOUGHT" },
+        }),
+      ]);
       await this.bumpDaily({ bought: 1, trades: 1 });
       this.watchlist.delete(t.mint);
+      forgetToken(t.mint);
+      this.lastTradeAt = Date.now();
 
-      logger.info("executor", `BUY ${t.mint.slice(0, 8)}… ${risk.sizeSol} SOL (${result.paper ? "paper" : "live"})`, {
-        signature: result.signature,
-        reason: entryReason,
-      });
+      logger.info(
+        "executor",
+        `BUY ${t.mint.slice(0, 8)}… ${reservation.entrySol} SOL (${result.paper ? "paper" : "live"}, ${latencyMs}ms, ${attempts} attempt(s))`,
+        { signature: result.signature, reason: entryReason }
+      );
       void notify(
         "buy",
-        `Bought ${t.mint.slice(0, 8)}… (${result.paper ? "paper" : "LIVE"})`,
-        `${risk.sizeSol} SOL @ $${priceUsd?.toPrecision(4) ?? "?"}\n${entryReason}`
+        `Bought ${symbol ?? t.mint.slice(0, 8) + "…"} (${result.paper ? "paper" : "LIVE"})`,
+        `${reservation.entrySol} SOL @ $${priceUsd?.toPrecision(4) ?? "?"}\n${entryReason}`
       );
     } catch (e) {
-      logger.error("executor", `buy ${t.mint.slice(0, 8)}… failed: ${(e as Error).message}`);
+      if (e instanceof SwapUncertainError) {
+        // The swap MAY have landed. Keep the position open for the monitor's
+        // balance reconciliation, flag it loudly, never auto-retry.
+        await prisma.trade.create({
+          data: {
+            tokenId: t.tokenId,
+            positionId: reservation.id,
+            side: "BUY",
+            paper: false,
+            mint: t.mint,
+            symbol,
+            amountSol: reservation.entrySol,
+            tokenQty: 0,
+            signature: e.signature,
+            reason: entryReason,
+            error: e.message,
+            rpcUrl: this.rpcUrls[this.rpcIndex],
+          },
+        });
+        logger.error("executor", `UNVERIFIED buy for ${t.mint.slice(0, 8)}… — check signature ${e.signature}`);
+        void notify("wallet_issue", "Unverified buy — manual check required", `${t.mint}\n${e.signature}`);
+        return;
+      }
+      // Clean failure: roll back the reservation so exposure is released.
+      await prisma.position.delete({ where: { id: reservation.id } }).catch(() => {});
+      logger.exception("executor", `buy ${t.mint.slice(0, 8)}… failed after retries`, e);
       void notify("error", "Buy failed", `${t.mint}: ${(e as Error).message}`);
-    } finally {
-      this.buying.delete(t.mint);
     }
   }
 
@@ -330,7 +523,7 @@ class TradingEngine {
       positions.map(async (p) => {
         if (this.selling.has(p.id)) return;
         const price = await getTokenPriceUsd(p.mint);
-        if (!price || !p.entryPriceUsd) return;
+        if (!price || !p.entryPriceUsd) return; // stale/no price → never act on it
 
         const peak = Math.max(p.peakPriceUsd ?? price, price);
         if (peak !== p.peakPriceUsd) {
@@ -355,6 +548,10 @@ class TradingEngine {
           liquidityDropPct,
         });
         if (decision.exit) {
+          if (await this.isReadOnly()) {
+            logger.warn("risk", `read-only mode: exit signal suppressed for ${p.mint.slice(0, 8)}… (${decision.kind})`);
+            return;
+          }
           await this.closePosition(p.id, price, decision.portionPct, decision.kind!, decision.reason);
         }
       })
@@ -370,15 +567,57 @@ class TradingEngine {
   ): Promise<void> {
     if (this.selling.has(positionId)) return;
     this.selling.add(positionId);
+    const started = Date.now();
     try {
       const p = await prisma.position.findUnique({ where: { id: positionId } });
       if (!p || p.status !== "OPEN") return;
 
       const settings = this.config.get();
       const executor = await this.getExecutor(p.paper);
-      const sellQty = p.tokenQty * (portionPct / 100);
-      const result = await executor.sell(p.mint, sellQty, settings.maxSlippageBps);
+      let sellQty = p.tokenQty * (portionPct / 100);
+
+      // Live-mode desync recovery: verify the wallet actually holds what the
+      // DB says before selling. If the tokens are gone (manual sale, partial
+      // fill, unverified buy that never landed), reconcile instead of firing
+      // a swap that will fail or sell someone else's balance.
+      if (!p.paper) {
+        const live = executor as LiveExecutor;
+        const onChain = await getWalletTokenBalance(this.conn, live.publicKey(), p.mint);
+        if (onChain <= 0) {
+          await prisma.position.update({
+            where: { id: p.id },
+            data: {
+              status: "CLOSED",
+              openKey: null,
+              exitReason: `reconciled: wallet holds no ${p.mint.slice(0, 8)}… (sold externally or buy never landed)`,
+              closedAt: new Date(),
+            },
+          });
+          logger.warn("executor", `position ${p.id} reconciled — no on-chain balance for ${p.mint.slice(0, 8)}…`);
+          void notify("wallet_issue", "Position reconciled", `No on-chain balance for ${p.mint}`);
+          return;
+        }
+        if (onChain < sellQty) {
+          logger.warn("executor", `wallet desync: selling on-chain balance ${onChain} instead of recorded ${sellQty}`);
+          sellQty = onChain;
+        }
+      }
+
+      const { result, attempts } = await withRetries<SwapResult>(
+        () =>
+          executor.sell(p.mint, sellQty, {
+            maxSlippageBps: settings.maxSlippageBps,
+            priorityFeeLamports: settings.priorityFeeLamports,
+          }),
+        {
+          retries: settings.retryCount,
+          isRetryable: (err) => !(err instanceof SwapUncertainError),
+          onRetry: (err, attempt) =>
+            logger.warn("executor", `sell retry ${attempt} for ${p.mint.slice(0, 8)}…: ${(err as Error).message}`),
+        }
+      );
       const receivedSol = result.outAmount / 1_000_000_000;
+      const latencyMs = Date.now() - started;
 
       const soldAll = portionPct >= 99.999;
       const proportionalEntry = p.entrySol * (portionPct / 100);
@@ -386,33 +625,43 @@ class TradingEngine {
       const pnlPct = p.entryPriceUsd ? ((priceUsd - p.entryPriceUsd) / p.entryPriceUsd) * 100 : null;
 
       const token = await prisma.detectedToken.findUnique({ where: { mint: p.mint } });
-      await prisma.trade.create({
-        data: {
-          tokenId: token?.id ?? "",
-          positionId: p.id,
-          side: "SELL",
-          paper: p.paper,
-          amountSol: receivedSol,
-          tokenQty: sellQty,
-          priceUsd,
-          signature: result.signature,
-          reason,
-        },
-      });
-      await prisma.position.update({
-        where: { id: p.id },
-        data: soldAll
-          ? {
-              status: "CLOSED",
-              exitSol: receivedSol,
-              exitPriceUsd: priceUsd,
-              pnlSol,
-              pnlPct,
-              exitReason: reason,
-              closedAt: new Date(),
-            }
-          : { tokenQty: p.tokenQty - sellQty, entrySol: p.entrySol - proportionalEntry },
-      });
+      await prisma.$transaction([
+        prisma.trade.create({
+          data: {
+            tokenId: token?.id ?? null,
+            positionId: p.id,
+            side: "SELL",
+            paper: p.paper,
+            mint: p.mint,
+            symbol: p.symbol,
+            amountSol: receivedSol,
+            tokenQty: sellQty,
+            priceUsd,
+            slippageBps: settings.maxSlippageBps,
+            signature: result.signature,
+            reason,
+            latencyMs,
+            rpcUrl: this.rpcUrls[this.rpcIndex],
+            priorityFeeLamports: settings.priorityFeeLamports,
+            retries: attempts - 1,
+          },
+        }),
+        prisma.position.update({
+          where: { id: p.id },
+          data: soldAll
+            ? {
+                status: "CLOSED",
+                openKey: null,
+                exitSol: receivedSol,
+                exitPriceUsd: priceUsd,
+                pnlSol,
+                pnlPct,
+                exitReason: reason,
+                closedAt: new Date(),
+              }
+            : { tokenQty: p.tokenQty - sellQty, entrySol: p.entrySol - proportionalEntry },
+        }),
+      ]);
       await this.bumpDaily({
         trades: 1,
         realizedSol: pnlSol,
@@ -420,20 +669,27 @@ class TradingEngine {
         losses: pnlSol <= 0 ? 1 : 0,
       });
       if (pnlSol <= 0) await redis.set("risk:lastLossAt", Date.now().toString());
+      this.lastTradeAt = Date.now();
 
-      logger.info("executor", `SELL ${p.mint.slice(0, 8)}… ${kind} pnl ${pnlSol.toFixed(4)} SOL`, {
+      logger.info("executor", `SELL ${p.mint.slice(0, 8)}… ${kind} pnl ${pnlSol.toFixed(4)} SOL (${latencyMs}ms)`, {
         reason,
         signature: result.signature,
       });
-      const event = kind === "take_profit" ? "profit_target" : kind === "stop_loss" ? "stop_loss" : kind === "rug_exit" ? "rug_warning" : "sell";
+      const event =
+        kind === "take_profit" ? "profit_target" : kind === "stop_loss" ? "stop_loss" : kind === "rug_exit" ? "rug_warning" : "sell";
       void notify(
         event as Parameters<typeof notify>[0],
-        `${kind.replace("_", " ")} on ${p.mint.slice(0, 8)}…`,
+        `${kind.replace(/_/g, " ")} on ${p.symbol ?? p.mint.slice(0, 8) + "…"}`,
         `${reason}\nPnL: ${pnlSol >= 0 ? "+" : ""}${pnlSol.toFixed(4)} SOL (${pnlPct?.toFixed(1) ?? "?"}%)`
       );
     } catch (e) {
-      logger.error("executor", `sell failed for position ${positionId}: ${(e as Error).message}`);
-      void notify("error", "Sell failed", (e as Error).message);
+      if (e instanceof SwapUncertainError) {
+        logger.error("executor", `UNVERIFIED sell for position ${positionId} — check ${e.signature}; next monitor tick will reconcile`);
+        void notify("wallet_issue", "Unverified sell — will reconcile", e.signature);
+      } else {
+        logger.exception("executor", `sell failed for position ${positionId} (will retry next tick)`, e);
+        void notify("error", "Sell failed", (e as Error).message);
+      }
     } finally {
       this.selling.delete(positionId);
     }
@@ -444,6 +700,36 @@ class TradingEngine {
     for (const p of positions) {
       const price = (await getTokenPriceUsd(p.mint)) ?? p.entryPriceUsd ?? 0;
       await this.closePosition(p.id, price, 100, "rug_exit", "emergency stop — operator initiated");
+    }
+  }
+
+  // ── data hygiene ──────────────────────────────────────────────────────────
+
+  /** Archive old scanner data so the DB and dashboard stay fast. */
+  private async archiveOldData(): Promise<void> {
+    const cutoff = new Date(Date.now() - ARCHIVE_AFTER_DAYS * 86_400_000);
+    try {
+      const snapshots = await prisma.tokenSnapshot.deleteMany({ where: { at: { lt: cutoff } } });
+      const scores = await prisma.scoreRecord.deleteMany({ where: { at: { lt: cutoff } } });
+      // Trades keep their history (tokenId → SetNull); positions are never touched.
+      const tokens = await prisma.detectedToken.deleteMany({
+        where: {
+          detectedAt: { lt: cutoff },
+          verdict: { in: ["REJECTED", "IGNORED"] },
+          trades: { none: {} },
+        },
+      });
+      const logs = await prisma.logEntry.deleteMany({
+        where: { at: { lt: new Date(Date.now() - 30 * 86_400_000) } },
+      });
+      if (snapshots.count || scores.count || tokens.count || logs.count) {
+        logger.info(
+          "engine",
+          `archived: ${tokens.count} tokens, ${snapshots.count} snapshots, ${scores.count} scores, ${logs.count} logs (>${ARCHIVE_AFTER_DAYS}d)`
+        );
+      }
+    } catch (e) {
+      logger.exception("engine", "archival failed", e);
     }
   }
 
@@ -522,7 +808,19 @@ function normalizeDelta(d: Record<string, number | undefined>) {
 
 // ── entrypoint ──────────────────────────────────────────────────────────────
 
+validateEnv("engine");
 const engine = new TradingEngine();
+
+// No silent failures: anything unhandled is logged with a stack trace, then
+// the process exits so the supervisor (docker restart: always) restarts it
+// and crash recovery rebuilds state from Postgres.
+process.on("unhandledRejection", (reason) => {
+  logger.exception("engine", "unhandled rejection", reason);
+});
+process.on("uncaughtException", (err) => {
+  logger.exception("engine", "uncaught exception — exiting for supervisor restart", err);
+  setTimeout(() => process.exit(1), 500);
+});
 
 async function main() {
   await engine.start();
@@ -536,8 +834,6 @@ async function main() {
 }
 
 main().catch((e) => {
-  logger.error("engine", `fatal: ${(e as Error).message}`);
-  // Crash recovery is handled by the process supervisor (docker restart:
-  // always / systemd Restart=on-failure); state is rebuilt from Postgres.
+  logger.exception("engine", "fatal startup error", e);
   process.exit(1);
 });

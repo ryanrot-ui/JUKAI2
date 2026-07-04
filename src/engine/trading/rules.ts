@@ -26,6 +26,9 @@ export function evaluateBuyRules(
   if (m.liquiditySol === null || m.liquiditySol < s.minLiquiditySol)
     failures.push(`liquidity ${m.liquiditySol?.toFixed(1) ?? "unknown"} SOL below minimum ${s.minLiquiditySol}`);
 
+  if (s.maxLiquiditySol !== null && m.liquiditySol !== null && m.liquiditySol > s.maxLiquiditySol)
+    failures.push(`liquidity ${m.liquiditySol.toFixed(1)} SOL above maximum ${s.maxLiquiditySol}`);
+
   if (m.marketCapUsd === null)
     failures.push("market cap unknown");
   else if (m.marketCapUsd < s.minMarketCapUsd || m.marketCapUsd > s.maxMarketCapUsd)
@@ -36,6 +39,15 @@ export function evaluateBuyRules(
 
   if (m.volume5mUsd === null || m.volume5mUsd < s.minVolume5mUsd)
     failures.push(`5m volume $${m.volume5mUsd?.toFixed(0) ?? "unknown"} below minimum $${s.minVolume5mUsd}`);
+
+  if (m.buySellRatio === null || m.buySellRatio < s.minBuyPressure)
+    failures.push(`buy pressure ${m.buySellRatio?.toFixed(2) ?? "unknown"} below minimum ${s.minBuyPressure}`);
+
+  if (m.topHolderPct !== null && m.topHolderPct > s.maxWhalePct)
+    failures.push(`top holder ${m.topHolderPct.toFixed(1)}% exceeds max whale ${s.maxWhalePct}%`);
+
+  if (m.devWalletPct !== null && m.devWalletPct > s.maxDevPct)
+    failures.push(`dev holds ${m.devWalletPct.toFixed(1)}% exceeding max ${s.maxDevPct}%`);
 
   if (m.volumeGrowthPct !== null && m.volumeGrowthPct < 0)
     failures.push(`volume trend negative (${m.volumeGrowthPct.toFixed(0)}%)`);

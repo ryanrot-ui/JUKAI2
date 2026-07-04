@@ -38,9 +38,12 @@ export class MigrationScanner {
   private onError: (err: Error, ctx: string) => void;
   private subId: number | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
+  private watchdogTimer: NodeJS.Timeout | null = null;
   private seen = new Set<string>();
   private stopped = false;
   private lastPolledSig: string | undefined;
+  /** last time either the WebSocket or the poller produced activity */
+  public lastActivityAt = Date.now();
 
   constructor(
     conn: Connection,
@@ -57,17 +60,46 @@ export class MigrationScanner {
     this.subscribe();
     // Poll every 30s as a safety net for missed WebSocket events
     this.pollTimer = setInterval(() => {
-      this.pollRecent().catch((e) => this.onError(e as Error, "poll"));
+      this.pollRecent()
+        .then(() => (this.lastActivityAt = Date.now()))
+        .catch((e) => this.onError(e as Error, "poll"));
     }, 30_000);
+    // Watchdog: if the WebSocket has been silent for 10 minutes, assume the
+    // subscription died quietly and rebuild it (web3.js does not always
+    // surface a dead upstream socket as an error).
+    this.watchdogTimer = setInterval(() => {
+      if (Date.now() - this.lastActivityAt > 10 * 60_000) {
+        this.onError(new Error("no scanner activity for 10m — resubscribing"), "watchdog");
+        void this.resubscribe();
+      }
+    }, 60_000);
   }
 
   async stop(): Promise<void> {
     this.stopped = true;
+    await this.unsubscribe();
+    if (this.pollTimer) clearInterval(this.pollTimer);
+    if (this.watchdogTimer) clearInterval(this.watchdogTimer);
+  }
+
+  /** Swap the underlying connection (RPC failover) and resubscribe. */
+  async setConnection(conn: Connection): Promise<void> {
+    await this.unsubscribe();
+    this.conn = conn;
+    if (!this.stopped) this.subscribe();
+  }
+
+  private async unsubscribe(): Promise<void> {
     if (this.subId !== null) {
       await this.conn.removeOnLogsListener(this.subId).catch(() => {});
       this.subId = null;
     }
-    if (this.pollTimer) clearInterval(this.pollTimer);
+  }
+
+  private async resubscribe(): Promise<void> {
+    await this.unsubscribe();
+    this.lastActivityAt = Date.now(); // reset so the watchdog doesn't loop
+    this.subscribe();
   }
 
   private subscribe(): void {
@@ -76,6 +108,7 @@ export class MigrationScanner {
       this.subId = this.conn.onLogs(
         PUMP_MIGRATION_AUTHORITY,
         (logs) => {
+          this.lastActivityAt = Date.now();
           if (logs.err) return; // failed tx
           this.processSignature(logs.signature).catch((e) =>
             this.onError(e as Error, "ws-process")

@@ -93,4 +93,31 @@ describe("evaluateBuyRules", () => {
     expect(decision.buy).toBe(false);
     expect(decision.reasons.some((r) => r.includes("momentum"))).toBe(true);
   });
+
+  it("rejects weak buy pressure below the configurable minimum", () => {
+    const m = candidate();
+    m.buySellRatio = 1.0;
+    const decision = evaluateBuyRules(m, scoreToken(m), { ...DEFAULT_SETTINGS, minBuyPressure: 1.5 });
+    expect(decision.buy).toBe(false);
+    expect(decision.reasons.some((r) => r.includes("buy pressure"))).toBe(true);
+  });
+
+  it("rejects whale and dev concentration over the configured caps", () => {
+    const m = candidate();
+    m.topHolderPct = 12;
+    m.devWalletPct = 8;
+    const settings = { ...DEFAULT_SETTINGS, maxWhalePct: 10, maxDevPct: 5 };
+    const decision = evaluateBuyRules(m, scoreToken(m), settings);
+    expect(decision.buy).toBe(false);
+    expect(decision.reasons.some((r) => r.includes("whale"))).toBe(true);
+    expect(decision.reasons.some((r) => r.includes("dev holds"))).toBe(true);
+  });
+
+  it("rejects liquidity above the optional ceiling", () => {
+    const m = candidate();
+    m.liquiditySol = 900;
+    const decision = evaluateBuyRules(m, scoreToken(m), { ...DEFAULT_SETTINGS, maxLiquiditySol: 500 });
+    expect(decision.buy).toBe(false);
+    expect(decision.reasons.some((r) => r.includes("above maximum"))).toBe(true);
+  });
 });

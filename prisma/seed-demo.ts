@@ -89,9 +89,11 @@ async function main() {
 
   const openPos = await prisma.position.create({
     data: {
-      mint: glxy.mint, symbol: "GLXY", status: "OPEN", paper: true,
+      mint: glxy.mint, symbol: "GLXY", status: "OPEN", paper: true, openKey: glxy.mint,
       entrySol: 0.1, entryPriceUsd: 0.00031, peakPriceUsd: 0.00046, tokenQty: 48_000,
       entryReason: "score 91: strong liquidity; healthy holder growth; strong buy pressure; increasing volume; no whale dominance; positive momentum",
+      scannerScore: 91,
+      scoreExplanation: "Base 88.2 from 13 weighted metrics, +10.0 from 11 green flag(s), -0 from 0 red flag(s).",
       openedAt: new Date(now - 18 * min),
     },
   });
@@ -120,6 +122,8 @@ async function main() {
         exitSol: c.entry + c.pnl, exitPriceUsd: 0.0002 * (1 + c.pct / 100),
         pnlSol: c.pnl, pnlPct: c.pct,
         entryReason: "score 88: strong liquidity; healthy holder growth; strong buy pressure; stable liquidity",
+        scannerScore: 88,
+        scoreExplanation: "Base 86.5 from 13 weighted metrics, +9.0 from 9 green flag(s), -0 from 0 red flag(s).",
         exitReason: c.kind, openedAt: opened, closedAt,
       },
     });

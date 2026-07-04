@@ -38,7 +38,9 @@ export default function RegisterPage() {
           <h1 className="text-2xl font-bold">
             Pump<span className="text-accent">Trader</span>
           </h1>
-          <p className="text-sm text-slate-500 mt-1">Create your account</p>
+          <p className="text-sm text-slate-500 mt-1">
+            First-run setup — create the administrator account
+          </p>
         </div>
         <form onSubmit={submit} className="card space-y-4">
           <div>
@@ -65,8 +67,12 @@ export default function RegisterPage() {
           </div>
           {error && <p className="text-loss text-sm">{error}</p>}
           <button className="btn-primary w-full py-2" disabled={busy}>
-            {busy ? "Creating…" : "Create account"}
+            {busy ? "Creating…" : "Create administrator account"}
           </button>
+          <p className="text-[10px] text-slate-600 text-center">
+            Registration is available only once. After the administrator account exists,
+            this page is permanently disabled.
+          </p>
           <p className="text-xs text-slate-500 text-center">
             Already registered?{" "}
             <Link href="/login" className="text-accent hover:underline">

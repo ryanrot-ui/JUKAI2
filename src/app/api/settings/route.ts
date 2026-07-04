@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { redis, KEYS } from "@/lib/redis";
 import { settingsSchema } from "@/lib/validation";
@@ -27,11 +28,36 @@ export async function PUT(req: Request) {
     );
   }
 
+  // Audit which keys changed (configuration changes are always logged)
+  const before = await prisma.settings.findUnique({ where: { userId: user.id } });
+  const changed = before
+    ? Object.entries(parsed.data)
+        .filter(([k, v]) => JSON.stringify((before as Record<string, unknown>)[k]) !== JSON.stringify(v))
+        .map(([k]) => k)
+    : ["(initial)"];
+
+  const data = {
+    ...parsed.data,
+    // Json columns need the sentinel to store SQL NULL (clears the override)
+    scoringWeights: parsed.data.scoringWeights ?? Prisma.DbNull,
+  };
   await prisma.settings.upsert({
     where: { userId: user.id },
-    update: parsed.data,
-    create: { userId: user.id, ...parsed.data },
+    update: data,
+    create: { userId: user.id, ...data },
   });
+
+  if (changed.length > 0) {
+    await prisma.logEntry
+      .create({
+        data: {
+          level: "info",
+          source: "api",
+          message: `settings changed by ${user.email}: ${changed.join(", ")}`,
+        },
+      })
+      .catch(() => {});
+  }
 
   // Tell the engine to hot-reload — no restart needed.
   await redis.publish(KEYS.settingsChannel, "updated").catch(() => {});

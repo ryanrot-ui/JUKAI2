@@ -14,10 +14,14 @@ export const DEFAULT_SETTINGS: BotSettings = settingsSchema.parse({
   buyAmountSol: 0.1,
   confidenceThreshold: 85,
   minLiquiditySol: 50,
+  maxLiquiditySol: null,
   minMarketCapUsd: 50_000,
   maxMarketCapUsd: 2_000_000,
   minHolders: 100,
   minVolume5mUsd: 5_000,
+  minBuyPressure: 1.2,
+  maxWhalePct: 15,
+  maxDevPct: 10,
   maxSlippageBps: 300,
   takeProfitPct: 100,
   stopLossPct: 30,
@@ -30,6 +34,10 @@ export const DEFAULT_SETTINGS: BotSettings = settingsSchema.parse({
   dailyProfitTarget: null,
   maxExposureSol: 1,
   lossCooldownMin: 15,
+  priorityFeeLamports: null,
+  retryCount: 2,
+  scannerIntervalSec: 15,
+  scoringWeights: null,
   botEnabled: false,
   paperTrading: true,
 });
@@ -65,29 +73,8 @@ export class LiveConfig {
       this.current = DEFAULT_SETTINGS;
       return;
     }
-    const parsed = settingsSchema.safeParse({
-      buyAmountSol: row.buyAmountSol,
-      confidenceThreshold: row.confidenceThreshold,
-      minLiquiditySol: row.minLiquiditySol,
-      minMarketCapUsd: row.minMarketCapUsd,
-      maxMarketCapUsd: row.maxMarketCapUsd,
-      minHolders: row.minHolders,
-      minVolume5mUsd: row.minVolume5mUsd,
-      maxSlippageBps: row.maxSlippageBps,
-      takeProfitPct: row.takeProfitPct,
-      stopLossPct: row.stopLossPct,
-      trailingStopPct: row.trailingStopPct,
-      maxHoldMinutes: row.maxHoldMinutes,
-      sellPortionPct: row.sellPortionPct,
-      maxSolPerTrade: row.maxSolPerTrade,
-      maxOpenPositions: row.maxOpenPositions,
-      maxDailyLossSol: row.maxDailyLossSol,
-      dailyProfitTarget: row.dailyProfitTarget,
-      maxExposureSol: row.maxExposureSol,
-      lossCooldownMin: row.lossCooldownMin,
-      botEnabled: row.botEnabled,
-      paperTrading: row.paperTrading,
-    });
+    const { id: _id, userId: _userId, updatedAt: _updatedAt, ...values } = row;
+    const parsed = settingsSchema.safeParse(values);
     if (parsed.success) {
       this.current = parsed.data;
       logger.info("engine", "settings reloaded", { paperTrading: parsed.data.paperTrading });

@@ -27,6 +27,7 @@ export async function GET() {
     wallets.map(async (w) => {
       let solBalance: number | null = null;
       let tokens: Array<{ mint: string; amount: number }> = [];
+      let recentTransactions: Array<{ signature: string; at: number | null; err: boolean }> = [];
       try {
         const pk = new PublicKey(w.publicKey);
         solBalance = (await conn.getBalance(pk)) / LAMPORTS_PER_SOL;
@@ -40,10 +41,17 @@ export async function GET() {
           }))
           .filter((t) => t.amount > 0)
           .slice(0, 50);
+        recentTransactions = (
+          await conn.getSignaturesForAddress(pk, { limit: 10 }, "confirmed")
+        ).map((s) => ({
+          signature: s.signature,
+          at: s.blockTime ? s.blockTime * 1000 : null,
+          err: s.err !== null,
+        }));
       } catch {
         /* RPC hiccup — return nulls, UI shows "unavailable" */
       }
-      return { ...w, solBalance, tokens };
+      return { ...w, solBalance, tokens, recentTransactions };
     })
   );
 
@@ -91,6 +99,15 @@ export async function POST(req: Request) {
         isWatchOnly: true,
       },
     });
+    await prisma.logEntry
+      .create({
+        data: {
+          level: "info",
+          source: "api",
+          message: `wallet connected (watch-only): ${publicKey} by ${user.email}`,
+        },
+      })
+      .catch(() => {});
     return NextResponse.json({ ok: true, publicKey: wallet.publicKey });
   }
 
@@ -117,6 +134,16 @@ export async function POST(req: Request) {
       isWatchOnly: false,
     },
   });
+  // Audit the import — public key only, never any key material.
+  await prisma.logEntry
+    .create({
+      data: {
+        level: "info",
+        source: "api",
+        message: `bot wallet imported (encrypted): ${wallet.publicKey} by ${user.email}`,
+      },
+    })
+    .catch(() => {});
   return NextResponse.json({ ok: true, publicKey: wallet.publicKey });
 }
 

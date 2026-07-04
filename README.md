@@ -64,7 +64,9 @@ Or run the whole stack in Docker: `docker compose up --build` (includes nightly
 Postgres backups to `./backups`, and `restart: always` gives the engine automatic
 crash recovery — it rebuilds its watchlist and open positions from Postgres on boot).
 
-Create an account at `http://localhost:3000/register`, then:
+Create the **administrator account** at `http://localhost:3000/register` (works
+exactly once — registration is permanently disabled after the admin exists;
+this is a single-operator system). Then:
 
 1. **Settings → Wallets → Connect Phantom** (watch-only: balances + deposits).
 2. Create a **fresh wallet in Phantom** to act as the bot wallet, fund it with a
@@ -121,14 +123,35 @@ exits all open positions).
 
 ## Security
 
-- Bot wallet keys: AES-256-GCM, key material only in env, decrypted only at signing.
-- Auth: NextAuth (bcrypt credentials + optional Google OAuth), JWT sessions,
-  middleware-protected routes; CSRF protection built into NextAuth.
+- **Single administrator** — registration self-disables after first use; Google
+  OAuth only signs in the existing admin, never creates accounts.
+- **argon2id password hashing** (legacy hashes upgraded transparently on login),
+  brute-force lockout (5 fails / 15 min per identity+IP), audit-logged attempts.
+- **Optional TOTP 2FA** (Google Authenticator/Authy), secret encrypted at rest.
+- Sessions: JWT, 8h expiry, HTTP-only + Secure cookies on HTTPS, 30-min
+  inactivity auto-logout; CSRF protection built into NextAuth.
+- Content-Security-Policy (same-origin), HSTS, X-Frame-Options and friends.
+- Bot wallet keys: AES-256-GCM, key material only in env, decrypted only at
+  signing, never logged, never returned by any API, never sent to the client.
 - Input validation: zod on every mutating endpoint; SQLi prevented by Prisma
-  parameterized queries; XSS by React escaping + security headers (`next.config.mjs`).
-- Rate limiting on registration and wallet endpoints (Redis).
-- Private keys are never returned by any API, never logged, never sent to the client.
+  parameterized queries; XSS by React escaping; rate limiting on sensitive
+  endpoints (Redis).
+- `npm audit --omit=dev`: 0 known vulnerabilities at time of audit.
 - Nightly automated Postgres backups (docker compose `backup` service).
+- Full audit report: [`docs/AUDIT.md`](docs/AUDIT.md) — read the "manual
+  verification" list before trading real funds.
+
+## Trading modes
+
+- **Manual** — connect Phantom (official wallet adapter); every trade is built
+  server-side, signed by you in the Phantom popup, and submitted. No key ever
+  leaves the extension.
+- **Auto** — the engine trades a dedicated, encrypted bot wallet under the
+  configured rules. The active mode (and paper/live/read-only state) is always
+  shown in the sidebar.
+- **Read-only** — the engine scans and scores but executes nothing.
+- **Emergency stop** — halts buying and exits every open position (with
+  confirmation).
 
 ## Testing
 

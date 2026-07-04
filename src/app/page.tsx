@@ -15,13 +15,32 @@ import { ScoreBadge, Sol, StatCard, shortMint, timeAgo } from "@/components/ui";
 
 interface Stats {
   realizedSol: number;
+  weeklyRealizedSol: number;
   openPositions: number;
   exposureSol: number;
   closedPositions: number;
   winRate: number | null;
   roiPct: number | null;
+  avgHoldMinutes: number | null;
+  avgPnlSol: number | null;
+  largestWinSol: number | null;
+  largestLossSol: number | null;
   pnlSeries: Array<{ date: string; realizedSol: number; cumulativeSol: number }>;
-  today: { realizedSol: number; trades: number; scanned: number; bought: number } | null;
+  today: { realizedSol: number; trades: number; scanned: number; bought: number; rejected: number } | null;
+}
+
+interface Health {
+  engineAlive: boolean;
+  status: string;
+  readOnly: boolean;
+  rpcUrl: string | null;
+  rpcLatencyMs: number | null;
+  scannerLastEventAt: number | null;
+  scansPerMin: number | null;
+  watchlistSize: number | null;
+  lastTradeAt: number | null;
+  memoryRssMb: number | null;
+  lastError: { at: number; source: string; message: string } | null;
 }
 
 interface PositionRow {
@@ -57,6 +76,7 @@ interface FeedEvent {
 
 export default function Dashboard() {
   const { data: stats } = usePoll<Stats>("/api/stats", 10_000);
+  const { data: health } = usePoll<Health>("/api/health", 10_000);
   const { data: positions } = usePoll<PositionRow[]>("/api/positions?status=OPEN", 5_000);
   const { data: tokens } = usePoll<TokenRow[]>("/api/tokens?limit=8", 8_000);
   const feed = useLiveFeed();
@@ -64,6 +84,49 @@ export default function Dashboard() {
   return (
     <AppShell>
       <h1 className="text-xl font-semibold mb-4">Dashboard</h1>
+
+      {/* Health strip */}
+      <div className="card mb-4 py-2.5 flex flex-wrap items-center gap-x-5 gap-y-1 text-xs">
+        <span className="flex items-center gap-1.5">
+          <span className={`w-2 h-2 rounded-full ${health?.engineAlive ? "bg-profit" : "bg-loss"}`} />
+          <span className="text-slate-400">
+            {health?.engineAlive ? "Engine healthy" : "Engine offline"}
+            {health?.readOnly ? " · READ-ONLY" : ""}
+          </span>
+        </span>
+        <span className="text-slate-500">
+          RPC{" "}
+          <span className={health?.rpcLatencyMs != null && health.rpcLatencyMs < 500 ? "text-profit" : "text-warn"}>
+            {health?.rpcLatencyMs != null ? `${health.rpcLatencyMs}ms` : "—"}
+          </span>
+        </span>
+        <span className="text-slate-500">
+          Scans/min <span className="text-slate-300">{health?.scansPerMin ?? "—"}</span>
+        </span>
+        <span className="text-slate-500">
+          Watching <span className="text-slate-300">{health?.watchlistSize ?? "—"}</span>
+        </span>
+        <span className="text-slate-500">
+          Last scan{" "}
+          <span className="text-slate-300">
+            {health?.scannerLastEventAt ? `${timeAgo(new Date(health.scannerLastEventAt))} ago` : "—"}
+          </span>
+        </span>
+        <span className="text-slate-500">
+          Last trade{" "}
+          <span className="text-slate-300">
+            {health?.lastTradeAt ? `${timeAgo(new Date(health.lastTradeAt))} ago` : "—"}
+          </span>
+        </span>
+        <span className="text-slate-500">
+          Mem <span className="text-slate-300">{health?.memoryRssMb ? `${health.memoryRssMb}MB` : "—"}</span>
+        </span>
+        {health?.lastError && (
+          <span className="text-loss truncate max-w-md" title={health.lastError.message}>
+            ⚠ [{health.lastError.source}] {health.lastError.message}
+          </span>
+        )}
+      </div>
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mb-4">
@@ -92,13 +155,36 @@ export default function Dashboard() {
         <StatCard
           label="Today"
           value={stats?.today ? `${stats.today.realizedSol >= 0 ? "+" : ""}${stats.today.realizedSol.toFixed(3)}` : "0.000"}
-          sub={`${stats?.today?.trades ?? 0} trades`}
+          sub={`${stats?.today?.trades ?? 0} trades · 7d ${stats ? (stats.weeklyRealizedSol >= 0 ? "+" : "") + stats.weeklyRealizedSol.toFixed(3) : "…"}`}
           tone={stats?.today && stats.today.realizedSol !== 0 ? (stats.today.realizedSol > 0 ? "profit" : "loss") : "neutral"}
         />
         <StatCard
           label="Scanned today"
           value={String(stats?.today?.scanned ?? 0)}
-          sub={`${stats?.today?.bought ?? 0} bought`}
+          sub={`${stats?.today?.bought ?? 0} bought · ${stats?.today?.rejected ?? 0} rejected`}
+        />
+      </div>
+
+      {/* Performance detail */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+        <StatCard
+          label="Avg hold time"
+          value={stats?.avgHoldMinutes != null ? `${stats.avgHoldMinutes.toFixed(0)}m` : "—"}
+        />
+        <StatCard
+          label="Avg PnL / trade"
+          value={stats?.avgPnlSol != null ? `${stats.avgPnlSol >= 0 ? "+" : ""}${stats.avgPnlSol.toFixed(4)}` : "—"}
+          tone={stats?.avgPnlSol != null ? (stats.avgPnlSol > 0 ? "profit" : "loss") : "neutral"}
+        />
+        <StatCard
+          label="Largest winner"
+          value={stats?.largestWinSol != null ? `+${stats.largestWinSol.toFixed(4)}` : "—"}
+          tone="profit"
+        />
+        <StatCard
+          label="Largest loser"
+          value={stats?.largestLossSol != null ? stats.largestLossSol.toFixed(4) : "—"}
+          tone={stats?.largestLossSol ? "loss" : "neutral"}
         />
       </div>
 

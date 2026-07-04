@@ -10,13 +10,17 @@ datasource db {
 // ── Users & auth ────────────────────────────────────────────────────────────
 
 model User {
-  id           String    @id @default(cuid())
-  email        String    @unique
-  passwordHash String? // null for OAuth-only accounts
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String? // argon2id (legacy bcrypt verified & upgraded on login)
   name         String?
-  createdAt    DateTime  @default(now())
-  settings     Settings?
-  wallets      Wallet[]
+  // Optional TOTP 2FA. The secret is AES-256-GCM encrypted at rest and is
+  // only decrypted server-side during code verification.
+  totpSecret  String?
+  totpEnabled Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  settings    Settings?
+  wallets     Wallet[]
 }
 
 // ── Wallets ─────────────────────────────────────────────────────────────────
@@ -42,14 +46,18 @@ model Settings {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   // Buying
-  buyAmountSol        Float @default(0.1)
-  confidenceThreshold Int   @default(85)
-  minLiquiditySol     Float @default(50)
-  minMarketCapUsd     Float @default(50000)
-  maxMarketCapUsd     Float @default(2000000)
-  minHolders          Int   @default(100)
-  minVolume5mUsd      Float @default(5000)
-  maxSlippageBps      Int   @default(300)
+  buyAmountSol        Float  @default(0.1)
+  confidenceThreshold Int    @default(85)
+  minLiquiditySol     Float  @default(50)
+  maxLiquiditySol     Float? // null = no ceiling
+  minMarketCapUsd     Float  @default(50000)
+  maxMarketCapUsd     Float  @default(2000000)
+  minHolders          Int    @default(100)
+  minVolume5mUsd      Float  @default(5000)
+  minBuyPressure      Float  @default(1.2) // minimum buy/sell ratio
+  maxWhalePct         Float  @default(15) // max single-holder % of supply
+  maxDevPct           Float  @default(10) // max developer holding %
+  maxSlippageBps      Int    @default(300)
 
   // Selling
   takeProfitPct   Float   @default(100) // default: cash out at +100%
@@ -65,6 +73,15 @@ model Settings {
   dailyProfitTarget Float? // SOL; null = disabled
   maxExposureSol    Float @default(1)
   lossCooldownMin   Int   @default(15)
+
+  // Execution
+  priorityFeeLamports Int? // null = auto priority fee
+  retryCount          Int  @default(2) // swap retry attempts on transient failure
+  scannerIntervalSec  Int  @default(15) // watchlist re-evaluation cadence
+
+  // Optional override of the scoring engine's metric weights (JSON object
+  // matching ScoringWeights; null = built-in defaults)
+  scoringWeights Json?
 
   // Engine
   botEnabled   Boolean @default(false)
@@ -134,50 +151,75 @@ model ScoreRecord {
 // ── Trading ─────────────────────────────────────────────────────────────────
 
 model Trade {
-  id      String        @id @default(cuid())
-  tokenId String
-  token   DetectedToken @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+  id      String  @id @default(cuid())
+  // Optional so archiving old scanner rows can never orphan or delete the
+  // financial record — trades outlive their DetectedToken.
+  tokenId String?
+  token   DetectedToken? @relation(fields: [tokenId], references: [id], onDelete: SetNull)
 
-  side       String // BUY | SELL
-  paper      Boolean  @default(true)
-  amountSol  Float
-  tokenQty   Float
-  priceUsd   Float?
+  side        String // BUY | SELL
+  paper       Boolean  @default(true)
+  mint        String   @default("")
+  symbol      String?
+  amountSol   Float
+  tokenQty    Float
+  priceUsd    Float?
   slippageBps Int?
-  signature  String? // tx signature (null for paper trades)
-  reason     String // human-readable explanation of why this trade fired
-  createdAt  DateTime @default(now())
+  signature   String? // tx signature (null for paper trades)
+  reason      String // human-readable explanation of why this trade fired
+
+  // Execution telemetry
+  latencyMs           Int? // detection→confirmation wall time for this swap
+  rpcUrl              String?
+  priorityFeeLamports Int?
+  retries             Int     @default(0)
+  error               String? // last error message if any attempt failed
+
+  createdAt DateTime @default(now())
 
   positionId String?
   position   Position? @relation(fields: [positionId], references: [id])
 
   @@index([createdAt])
+  @@index([positionId])
+  @@index([mint])
 }
 
 model Position {
-  id     String @id @default(cuid())
+  id     String  @id @default(cuid())
   mint   String
   symbol String?
 
-  status       String   @default("OPEN") // OPEN | CLOSED
-  paper        Boolean  @default(true)
-  entrySol     Float
+  // Duplicate-buy guard enforced by the DATABASE, not just app logic:
+  // set to the mint while OPEN, cleared on close. The unique constraint
+  // makes a second concurrent open position on the same mint impossible.
+  openKey String? @unique
+
+  status        String    @default("OPEN") // OPEN | CLOSED
+  paper         Boolean   @default(true)
+  entrySol      Float
   entryPriceUsd Float?
-  tokenQty     Float
-  peakPriceUsd Float? // for trailing stop
-  exitSol      Float?
-  exitPriceUsd Float?
-  pnlSol       Float?
-  pnlPct       Float?
-  entryReason  String
-  exitReason   String?
-  openedAt     DateTime  @default(now())
-  closedAt     DateTime?
+  tokenQty      Float
+  peakPriceUsd  Float? // for trailing stop
+  exitSol       Float?
+  exitPriceUsd  Float?
+  pnlSol        Float?
+  pnlPct        Float?
+  entryReason   String
+  exitReason    String?
+
+  // Snapshot of the analysis that triggered the entry
+  scannerScore     Int?
+  scoreExplanation String?
+
+  openedAt DateTime  @default(now())
+  closedAt DateTime?
 
   trades Trade[]
 
   @@index([status])
   @@index([openedAt])
+  @@index([mint])
 }
 
 // ── Logging & metrics ───────────────────────────────────────────────────────
@@ -192,6 +234,7 @@ model LogEntry {
 
   @@index([at])
   @@index([level])
+  @@index([source])
 }
 
 model DailyStats {

@@ -19,6 +19,18 @@ export function log(
   else if (level === "warn") console.warn(line, meta ?? "");
   else console.log(line, meta ?? "");
 
+  // Surface the most recent error on the dashboard health strip.
+  if (level === "error") {
+    void redis
+      .set(
+        "bot:lastError",
+        JSON.stringify({ at: Date.now(), source, message, meta }),
+        "EX",
+        7 * 86400
+      )
+      .catch(() => {});
+  }
+
   void prisma.logEntry
     .create({ data: { level, source, message, meta: meta ? JSON.parse(JSON.stringify(meta)) : undefined } })
     .catch(() => {});
@@ -36,4 +48,9 @@ export const logger = {
   info: (s: LogSource, m: string, meta?: Record<string, unknown>) => log("info", s, m, meta),
   warn: (s: LogSource, m: string, meta?: Record<string, unknown>) => log("warn", s, m, meta),
   error: (s: LogSource, m: string, meta?: Record<string, unknown>) => log("error", s, m, meta),
+  /** Error with full stack trace attached — no silent failures. */
+  exception: (s: LogSource, m: string, err: unknown, meta?: Record<string, unknown>) => {
+    const e = err instanceof Error ? err : new Error(String(err));
+    log("error", s, `${m}: ${e.message}`, { ...meta, stack: e.stack });
+  },
 };
