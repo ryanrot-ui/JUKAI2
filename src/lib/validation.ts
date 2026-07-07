@@ -59,6 +59,17 @@ export const settingsSchema = z.object({
   paperTrading: z.boolean(),
 });
 
+/**
+ * Settings-form updates. botEnabled and paperTrading are deliberately
+ * excluded: they are controlled through /api/bot (start/stop and the
+ * confirmed paper↔live mode switch), so a stale settings form can never
+ * silently flip the trading mode.
+ */
+export const settingsUpdateSchema = settingsSchema.omit({
+  botEnabled: true,
+  paperTrading: true,
+});
+
 export type BotSettings = z.infer<typeof settingsSchema>;
 export type ScoringWeightsInput = z.infer<typeof scoringWeightsSchema>;
 

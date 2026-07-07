@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { VersionedTransaction } from "@solana/web3.js";
 import { AppShell } from "@/components/layout/AppShell";
+import { TradingModeToggle } from "@/components/TradingModeToggle";
 import { usePoll } from "@/components/usePoll";
 import { shortMint, timeAgo } from "@/components/ui";
 
@@ -108,29 +109,13 @@ export default function SettingsPage() {
         guarantee profitable trades on newly migrated tokens, which are extremely volatile.
       </p>
 
+      {/* Paper / Live switch — server-enforced confirmation before live mode */}
+      <div className="max-w-md mb-4">
+        <TradingModeToggle />
+      </div>
+
       {form && (
         <>
-          {/* Mode toggles */}
-          <div className="card mb-4 flex flex-wrap gap-6 items-center">
-            <label className="flex items-center gap-2 text-sm cursor-pointer">
-              <input
-                type="checkbox"
-                checked={Boolean(form.paperTrading)}
-                onChange={(e) => setForm({ ...form, paperTrading: e.target.checked })}
-                className="accent-indigo-500 w-4 h-4"
-              />
-              <span>
-                Paper trading{" "}
-                <span className="text-slate-500 text-xs">(simulated fills, no real SOL — recommended)</span>
-              </span>
-            </label>
-            {!form.paperTrading && (
-              <span className="text-xs text-warn bg-warn/10 border border-warn/30 rounded px-2 py-1">
-                ⚠ LIVE MODE — trades spend real SOL from the imported bot wallet
-              </span>
-            )}
-          </div>
-
           <div className="grid lg:grid-cols-2 xl:grid-cols-4 gap-4">
             {SECTIONS.map((section) => (
               <div key={section.title} className="card">
