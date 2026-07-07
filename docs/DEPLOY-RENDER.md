@@ -56,6 +56,29 @@ those paths to instant pub/sub and shares rate-limit counters across
 instances. Without it, nothing degrades except a few seconds of propagation
 latency — and no logs are spammed.
 
+## Troubleshooting login / registration
+
+- **"Registration is disabled — administrator account already exists."**
+  This is a single-administrator system: `/register` works exactly once. An
+  account created during an earlier deployment attempt counts. To reset the
+  password (or recreate the admin on an empty database), run — with the
+  production `DATABASE_URL` exported:
+
+  ```bash
+  npm run admin:reset -- you@example.com 'a-new-strong-password' [--disable-2fa]
+  ```
+
+  (On Render: open a Shell on the web service, or run it locally against the
+  Neon connection string.)
+- **"The server cannot reach its database…"** on either page means exactly
+  that: `DATABASE_URL` is missing/wrong or the database is down. The web
+  container starts anyway so you can see the site; check the service logs —
+  the entrypoint prints the schema-sync result on every boot.
+- **Login always says invalid credentials:** after 5 failed attempts per
+  email+IP the account locks for 15 minutes (brute-force protection). Wait it
+  out, or restart the web service (counters are in-memory unless Redis is
+  configured).
+
 ## Notes
 
 - **Plans:** the engine worker runs 24/7; Render free-tier web services spin

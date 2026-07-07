@@ -77,7 +77,9 @@ see [`docs/DEPLOY-RENDER.md`](docs/DEPLOY-RENDER.md).
 
 Create the **administrator account** at `http://localhost:3000/register` (works
 exactly once — registration is permanently disabled after the admin exists;
-this is a single-operator system). Then:
+this is a single-operator system). Locked out or the account was created during
+an earlier deployment attempt? Reset it against the production database:
+`npm run admin:reset -- you@example.com 'new-password' [--disable-2fa]`. Then:
 
 1. **Settings → Wallets → Connect Phantom** (watch-only: balances + deposits).
 2. Create a **fresh wallet in Phantom** to act as the bot wallet, fund it with a

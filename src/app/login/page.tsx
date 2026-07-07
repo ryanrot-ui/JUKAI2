@@ -19,8 +19,21 @@ export default function LoginPage() {
     setError(null);
     const res = await signIn("credentials", { email, password, totp, redirect: false });
     setBusy(false);
-    if (res?.error) setError("Invalid credentials (or missing/wrong 2FA code)");
-    else router.push("/");
+    if (res?.error) {
+      // Distinguish "wrong password" from "the deployment is broken": when
+      // the database is unreachable every login fails, and blaming the
+      // credentials would send the operator down the wrong path.
+      const health = await fetch("/api/healthz", { cache: "no-store" })
+        .then((r) => r.json() as Promise<{ database?: boolean }>)
+        .catch(() => null);
+      if (health && health.database === false) {
+        setError(
+          "The server cannot reach its database — check DATABASE_URL and the deployment logs."
+        );
+      } else {
+        setError("Invalid credentials (or missing/wrong 2FA code)");
+      }
+    } else router.push("/");
   };
 
   return (

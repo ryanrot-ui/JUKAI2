@@ -14,7 +14,8 @@
     "db:migrate": "prisma migrate deploy",
     "db:push": "prisma db push",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "admin:reset": "tsx scripts/reset-admin.ts"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.0.2",
