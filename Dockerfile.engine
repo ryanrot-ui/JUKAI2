@@ -7,5 +7,6 @@ RUN npm ci --no-audit --no-fund && npx prisma generate
 COPY tsconfig.json vitest.config.ts ./
 COPY src ./src
 # tsx runs the TypeScript worker directly; restart: always in compose gives
-# automatic crash recovery (state is rebuilt from Postgres on boot).
-CMD ["npx", "tsx", "src/engine/index.ts"]
+# automatic crash recovery (state is rebuilt from Postgres on boot). The
+# schema push is idempotent — safe even when the web service also runs it.
+CMD ["sh", "-c", "npx prisma db push --skip-generate && npx tsx src/engine/index.ts"]
