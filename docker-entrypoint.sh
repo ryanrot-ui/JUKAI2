@@ -12,8 +12,10 @@ set -e
 
 if [ -n "$DATABASE_URL" ]; then
   echo "[entrypoint] applying database schema…"
-  if ./node_modules/.bin/prisma db push --skip-generate; then
+  echo "DATABASE_URL exists: ${DATABASE_URL:+yes}"
+  if ./node_modules/.bin/prisma db push --accept-data-loss --skip-generate; then
     echo "[entrypoint] schema in sync"
+  
   else
     echo "[entrypoint] WARNING: schema push failed — starting server anyway (check DATABASE_URL / database reachability)"
   fi
