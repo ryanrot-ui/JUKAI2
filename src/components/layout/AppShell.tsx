@@ -10,6 +10,7 @@ import { WalletProviders } from "../wallet/WalletProviders";
 const NAV = [
   { href: "/", label: "Dashboard", icon: "◧" },
   { href: "/scanner", label: "Scanner", icon: "◉" },
+  { href: "/intelligence", label: "Intelligence", icon: "◈" },
   { href: "/positions", label: "Positions", icon: "⇅" },
   { href: "/logs", label: "Logs", icon: "≡" },
   { href: "/settings", label: "Settings", icon: "⚙" },
@@ -40,7 +41,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     setTimeout(reload, 300);
   };
 
-  const running = bot?.status === "running" && bot?.mode === "auto";
+  // "idle" = a serverless engine deployment between bounded cycles — the
+  // engine is operational (the scheduler starts the next cycle within a
+  // minute); heartbeat freshness (engineAlive) reports actual liveness.
+  const running = (bot?.status === "running" || bot?.status === "idle") && bot?.mode === "auto";
   const emergency = bot?.status === "emergency_stopped";
 
   const modeLabel = emergency
@@ -151,6 +155,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             >
               Sign out
             </button>
+            <p className="text-[9px] text-slate-600 leading-snug px-1">
+              High-risk experimental software — not financial advice, no profit
+              guarantees. Paper trades are simulations.
+            </p>
           </div>
         </aside>
 

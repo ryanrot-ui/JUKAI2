@@ -8,7 +8,9 @@ import { z } from "zod";
 
 const common = z.object({
   DATABASE_URL: z.string().url().or(z.string().startsWith("postgresql://")),
-  REDIS_URL: z.string().min(1),
+  // Optional: pub/sub fast path + shared rate-limit counters. Everything
+  // falls back to database polling / in-memory counters without it.
+  REDIS_URL: z.string().min(1).optional(),
 });
 
 const engineExtra = z.object({
@@ -24,7 +26,21 @@ const webExtra = z.object({
   NEXTAUTH_SECRET: z.string().min(16, "NEXTAUTH_SECRET must be a strong random value"),
 });
 
+/**
+ * Platform-provided defaults. Netlify injects the site's public URL as URL
+ * (production) / DEPLOY_PRIME_URL (deploy previews); NextAuth needs it as
+ * NEXTAUTH_URL. An explicitly configured NEXTAUTH_URL always wins (custom
+ * domains). Call before anything reads NEXTAUTH_URL.
+ */
+export function applyPlatformEnvDefaults(): void {
+  if (!process.env.NEXTAUTH_URL) {
+    const url = process.env.URL ?? process.env.DEPLOY_PRIME_URL;
+    if (url) process.env.NEXTAUTH_URL = url;
+  }
+}
+
 export function validateEnv(kind: "engine" | "web"): void {
+  applyPlatformEnvDefaults();
   const schema = kind === "engine" ? common.merge(engineExtra) : common.merge(webExtra);
   const result = schema.safeParse(process.env);
   if (!result.success) {
