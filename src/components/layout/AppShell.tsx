@@ -152,6 +152,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             >
               Sign out
             </button>
+            <p className="text-[9px] text-slate-600 leading-snug px-1">
+              High-risk experimental software — not financial advice, no profit
+              guarantees. Paper trades are simulations.
+            </p>
           </div>
         </aside>
 

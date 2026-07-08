@@ -16,8 +16,12 @@ export function parseTelegramMembers(html: string): number | null {
   return Number.isFinite(value) && value > 0 ? value : null;
 }
 
+/** Telegram handles are alnum/underscore; anything else is discarded so a
+ *  malicious DexScreener social entry can never shape the request path. */
+const HANDLE_RE = /^[A-Za-z0-9_]{3,64}$/;
+
 export async function collectTelegramMembers(handle: string | null): Promise<number | null> {
-  if (!handle) return null;
+  if (!handle || !HANDLE_RE.test(handle)) return null;
   try {
     const res = await fetch(`https://t.me/${encodeURIComponent(handle)}`, {
       signal: AbortSignal.timeout(6000),

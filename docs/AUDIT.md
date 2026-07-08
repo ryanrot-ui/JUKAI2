@@ -1,6 +1,58 @@
 # Production Audit Report — PumpTrader
 
-> **Addendum — fourth round: Narrative & Social Intelligence Engine (2026-07).**
+> **Addendum — fifth round: final security, compliance & operational-safety
+> review (2026-07).** Full adversarial pass over the codebase, dependency
+> audit (`npm audit --omit=dev`: 0 vulnerabilities), and sink sweep (no
+> `dangerouslySetInnerHTML`/`eval`/`child_process`/fs access in `src/`; no
+> secret logging; the only `NEXT_PUBLIC_` var is a non-secret RPC URL).
+>
+> **Fixed this round:**
+> - **Manual-trade hardening (medium).** `/api/manual-trade/submit`
+>   previously relayed any signed transaction and recorded client-supplied
+>   metadata. Now: the build step requires the wallet to be **linked to the
+>   account** (signed ownership proof or imported bot wallet), registers the
+>   SHA-256 of the built transaction message, and the submit step only
+>   relays a transaction whose message hash is pending for that user —
+>   consumed exactly once, so a double-click can never double-submit, the
+>   endpoint cannot be used as an open relay, and trade history records the
+>   server-verified mint/side, not client claims. Unit-tested.
+> - **Engine container ran as root (medium, infra).** `Dockerfile.engine`
+>   now creates and switches to a non-root user, matching the web image —
+>   the worker decrypts wallet keys in memory and must be least-privilege.
+> - **Telegram handle sanitization (low, defense-in-depth).** Handles from
+>   DexScreener social entries are now validated against
+>   `^[A-Za-z0-9_]{3,64}$` before being used in the t.me request path.
+> - **Misleading email-notification stub (low, operational).** `sendEmail`
+>   logged "email queued" without ever sending. It now warns once that SMTP
+>   delivery is not implemented, so the operator never trusts a channel that
+>   doesn't exist.
+> - **Compliance.** Persistent sidebar disclaimer ("high-risk experimental
+>   software — not financial advice, no profit guarantees; paper trades are
+>   simulations") complements the existing register-page risk warning and
+>   the live-mode confirmation dialog.
+>
+> **Verified as already sound:** argon2id + lockout + audit-logged auth;
+> JWT sessions with Secure/HTTP-only cookies + CSRF (NextAuth double-submit);
+> same-origin CSP + HSTS + X-Frame-Options/frame-ancestors (clickjacking) +
+> nosniff; no CORS relaxation (same-origin only); Prisma-parameterized
+> queries; zod validation on every mutating endpoint; rate limits on
+> register/login(brute force)/wallet/2FA/bot/manual-trade; AES-256-GCM
+> key storage with env-only key material, decryption only at signing;
+> TOTP with timing-safe comparison, secret returned exactly once; wallet
+> linking requires an ed25519 ownership proof; server-enforced live-mode
+> confirmation + bot-wallet requirement; DB-unique duplicate-buy guard;
+> never-retry-uncertain swap semantics with on-chain reconciliation;
+> generic client errors with server-side detail logging; narrative
+> providers pinned to fixed hosts (no SSRF surface).
+>
+> **Compliance/ToS notes:** respect DexScreener/Jupiter public-API rate
+> limits (bounded polling built in); Reddit public JSON is used with a
+> descriptive User-Agent at low volume; X data only via the official API
+> with the operator's own token; t.me pages are public previews. Operating
+> an automated trading system may carry regulatory obligations depending on
+> jurisdiction — seek legal review before offering this to third parties;
+> as shipped it is strictly single-operator, trading the operator's own
+> funds.
 >
 > New subsystem (`src/engine/narrative/`): every watched token is researched
 > across independent public sources (DexScreener socials/boosts/activity,
