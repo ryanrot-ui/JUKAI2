@@ -15,7 +15,8 @@
     "db:push": "prisma db push",
     "test": "vitest run",
     "test:watch": "vitest",
-    "admin:reset": "tsx scripts/reset-admin.ts"
+    "admin:reset": "tsx scripts/reset-admin.ts",
+    "netlify:build": "node scripts/netlify-build.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",

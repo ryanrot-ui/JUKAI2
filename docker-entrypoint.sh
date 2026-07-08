@@ -38,13 +38,23 @@ fi
 if [ -z "$DATABASE_URL" ]; then
   echo "[entrypoint] WARNING: DATABASE_URL is not set — the app needs PostgreSQL. Starting the server so the site loads, but all data operations will fail until you configure it."
 else
-  # Schema application uses a DIRECT connection. Prisma reads directUrl from the
-  # schema via DIRECT_URL; default it to DATABASE_URL when no separate direct
-  # endpoint is provided (plain Postgres, or a Neon URL that is already direct).
-  export DIRECT_URL="${DIRECT_URL:-$DATABASE_URL}"
-  case "$DIRECT_URL" in
-    *-pooler.*) echo "[entrypoint] WARNING: DIRECT_URL points at a POOLED endpoint (…-pooler…). Prisma db push may fail — use the non-pooled Neon host for DIRECT_URL." ;;
-  esac
+  # Schema application uses a DIRECT connection. Prisma reads it from the schema
+  # via DIRECT_URL. If DIRECT_URL is not set, derive it automatically:
+  #   - Neon pooled URL (host contains "-pooler") → strip "-pooler" to get the
+  #     direct endpoint, so schema init works with ONLY DATABASE_URL configured.
+  #   - otherwise → use DATABASE_URL as-is (plain Postgres / already-direct URL).
+  if [ -z "$DIRECT_URL" ]; then
+    case "$DATABASE_URL" in
+      *-pooler.*)
+        DIRECT_URL=$(printf '%s' "$DATABASE_URL" | sed 's/-pooler\./\./')
+        echo "[entrypoint] derived DIRECT_URL from DATABASE_URL (removed -pooler) for schema application"
+        ;;
+      *)
+        DIRECT_URL="$DATABASE_URL"
+        ;;
+    esac
+    export DIRECT_URL
+  fi
 
   echo "[entrypoint] applying database schema (idempotent, non-destructive)…"
   attempt=1
