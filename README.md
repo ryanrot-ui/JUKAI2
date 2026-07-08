@@ -154,6 +154,9 @@ slippage haircut, using the identical decision pipeline).
 - Content-Security-Policy (same-origin), HSTS, X-Frame-Options and friends.
 - Bot wallet keys: AES-256-GCM, key material only in env, decrypted only at
   signing, never logged, never returned by any API, never sent to the client.
+- Phantom linking requires a signed ownership proof (free `signMessage`,
+  verified ed25519 server-side with account binding + a 10-minute replay
+  window) — arbitrary addresses can never be attached to an account.
 - Input validation: zod on every mutating endpoint; SQLi prevented by Prisma
   parameterized queries; XSS by React escaping; rate limiting on sensitive
   endpoints (Redis-backed when configured, in-memory otherwise).

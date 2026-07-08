@@ -9,6 +9,6 @@ export default withAuth({ pages: { signIn: "/login" } });
 // and the unauthenticated liveness probe used by platform health checks.
 export const config = {
   matcher: [
-    "/((?!login|register|api/auth|api/healthz|_next/static|_next/image|favicon.ico).*)",
+    "/((?!login|register|api/auth|api/healthz|_next/static|_next/image|favicon.ico|icon.svg).*)",
   ],
 };

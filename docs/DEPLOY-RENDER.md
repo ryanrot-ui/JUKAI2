@@ -56,6 +56,20 @@ those paths to instant pub/sub and shares rate-limit counters across
 instances. Without it, nothing degrades except a few seconds of propagation
 latency — and no logs are spammed.
 
+## Google sign-in (optional)
+
+1. Google Cloud Console → APIs & Services → Credentials → **Create OAuth
+   client ID** (type: Web application).
+2. Authorized redirect URI: `https://<your-app>.onrender.com/api/auth/callback/google`
+   (must match `NEXTAUTH_URL` exactly, including https).
+3. Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` on the **web** service.
+
+The "Continue with Google" button appears automatically once both variables
+are set. Google sign-in only accepts the **existing administrator's email**
+(the Google account's email must match it) — it never creates accounts. A
+mismatched account shows "This Google account is not authorized" on the
+login page.
+
 ## Troubleshooting login / registration
 
 - **"Registration is disabled — administrator account already exists."**

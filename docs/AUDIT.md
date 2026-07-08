@@ -1,5 +1,31 @@
 # Production Audit Report — PumpTrader
 
+> **Addendum — third round: Google OAuth + Phantom verification (2026-07).**
+>
+> - **Phantom wallet ownership verification.** Connecting Phantom now links
+>   the address only after the wallet signs a server-issued verification
+>   message (Phantom's free `signMessage` prompt); the server verifies the
+>   ed25519 signature, the account binding and a 10-minute freshness window
+>   (`src/lib/walletVerify.ts`, unit-tested incl. forged/expired/tampered/
+>   wrong-length inputs). Declining the signature leaves the wallet connected
+>   but unlinked, with a clear message.
+> - **Wallet UX correctness.** Fixed the select-then-connect race (first
+>   click previously reported "cancelled" while connecting) and surfaced
+>   adapter errors (rejection, locked wallet) via a WalletProvider `onError`
+>   → DOM event bridge — the adapter's default silently deselects and logs.
+> - **Google sign-in.** The button now renders only when the provider is
+>   actually configured (`/api/auth/providers`); OAuth callback error codes
+>   (`?error=AccessDenied`, …) render as human-readable messages; redirect-
+>   URI setup documented for Render. Verified end-to-end to the Google
+>   handoff (provider registration, signin POST, redirect to
+>   accounts.google.com with correct callback + scopes).
+> - **Browser-level test coverage.** Mock-Phantom Playwright suite (14
+>   scenarios): connect/verify/link, address + balance display, auto-
+>   reconnect on reload, disconnect, user-rejected connect, user-rejected
+>   signature, forged-proof rejection, extension-missing hint, Google button
+>   visibility, OAuth error rendering. Plus the 10-scenario auth suite from
+>   round two.
+>
 > **Addendum — second hardening round (2026-07).** Changes since the original
 > audit below:
 >
