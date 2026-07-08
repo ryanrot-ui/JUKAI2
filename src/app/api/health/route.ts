@@ -32,6 +32,16 @@ export async function GET() {
     lastTradeAt: health.lastTradeAt ?? null,
     memoryRssMb: health.rssMb ?? null,
     memoryHeapMb: health.heapMb ?? null,
+    // scanner observability (Engine Running / RPC Connected / Scanner Active /
+    // Last Scan / Tokens Detected indicators on the dashboard)
+    rpcConnected: health.rpcLatencyMs != null,
+    scannerSubscribed: health.scannerSubscribed ?? null,
+    lastScanAt: health.lastScanAt ?? null,
+    lastPollCount: health.lastPollCount ?? null,
+    wsConnected: health.wsConnected ?? null,
+    usingPublicRpc: health.usingPublicRpc ?? null,
+    tokensDetected: health.tokensDetected ?? null,
+    scannerError: health.scannerError ?? null,
     lastError: lastErrorEntry
       ? { at: lastErrorEntry.at.getTime(), source: lastErrorEntry.source, message: lastErrorEntry.message }
       : null,

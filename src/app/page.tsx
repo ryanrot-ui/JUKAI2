@@ -13,6 +13,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { TradingModeToggle } from "@/components/TradingModeToggle";
 import { usePoll } from "@/components/usePoll";
 import { ScoreBadge, Sol, StatCard, shortMint, timeAgo } from "@/components/ui";
+import { HealthIndicators, type Health } from "@/components/HealthIndicators";
 
 interface Stats {
   totalTrades: number;
@@ -39,19 +40,6 @@ interface Stats {
 
 type StatsMode = "all" | "paper" | "live";
 
-interface Health {
-  engineAlive: boolean;
-  status: string;
-  readOnly: boolean;
-  rpcUrl: string | null;
-  rpcLatencyMs: number | null;
-  scannerLastEventAt: number | null;
-  scansPerMin: number | null;
-  watchlistSize: number | null;
-  lastTradeAt: number | null;
-  memoryRssMb: number | null;
-  lastError: { at: number; source: string; message: string } | null;
-}
 
 interface PositionRow {
   id: string;
@@ -113,48 +101,8 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Health strip */}
-      <div className="card mb-4 py-2.5 flex flex-wrap items-center gap-x-5 gap-y-1 text-xs">
-        <span className="flex items-center gap-1.5">
-          <span className={`w-2 h-2 rounded-full ${health?.engineAlive ? "bg-profit" : "bg-loss"}`} />
-          <span className="text-slate-400">
-            {health?.engineAlive ? "Engine healthy" : "Engine offline"}
-            {health?.readOnly ? " · READ-ONLY" : ""}
-          </span>
-        </span>
-        <span className="text-slate-500">
-          RPC{" "}
-          <span className={health?.rpcLatencyMs != null && health.rpcLatencyMs < 500 ? "text-profit" : "text-warn"}>
-            {health?.rpcLatencyMs != null ? `${health.rpcLatencyMs}ms` : "—"}
-          </span>
-        </span>
-        <span className="text-slate-500">
-          Scans/min <span className="text-slate-300">{health?.scansPerMin ?? "—"}</span>
-        </span>
-        <span className="text-slate-500">
-          Watching <span className="text-slate-300">{health?.watchlistSize ?? "—"}</span>
-        </span>
-        <span className="text-slate-500">
-          Last scan{" "}
-          <span className="text-slate-300">
-            {health?.scannerLastEventAt ? `${timeAgo(new Date(health.scannerLastEventAt))} ago` : "—"}
-          </span>
-        </span>
-        <span className="text-slate-500">
-          Last trade{" "}
-          <span className="text-slate-300">
-            {health?.lastTradeAt ? `${timeAgo(new Date(health.lastTradeAt))} ago` : "—"}
-          </span>
-        </span>
-        <span className="text-slate-500">
-          Mem <span className="text-slate-300">{health?.memoryRssMb ? `${health.memoryRssMb}MB` : "—"}</span>
-        </span>
-        {health?.lastError && (
-          <span className="text-loss truncate max-w-md" title={health.lastError.message}>
-            ⚠ [{health.lastError.source}] {health.lastError.message}
-          </span>
-        )}
-      </div>
+      {/* Engine / scanner health indicators */}
+      <HealthIndicators health={health} />
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mb-4">

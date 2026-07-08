@@ -23,6 +23,21 @@ export interface EngineHealth {
   lastTradeAt?: number | null;
   rssMb?: number;
   heapMb?: number;
+  // ── scanner observability ────────────────────────────────────────────────
+  /** true when the realtime onLogs subscription id is held. */
+  scannerSubscribed?: boolean;
+  /** epoch ms of the last completed poll cycle (reliable HTTP fallback). */
+  lastScanAt?: number | null;
+  /** signatures seen in the last poll cycle. */
+  lastPollCount?: number;
+  /** true when the migration-authority websocket has not errored recently. */
+  wsConnected?: boolean;
+  /** true when running against the public mainnet RPC (no dedicated endpoint). */
+  usingPublicRpc?: boolean;
+  /** total DetectedToken rows (the "Tokens Detected" indicator). */
+  tokensDetected?: number;
+  /** last scanner poll error (rate limit / unreachable), if any. */
+  scannerError?: string | null;
 }
 
 export async function getEngineState() {

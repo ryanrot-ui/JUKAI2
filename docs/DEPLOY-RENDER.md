@@ -106,6 +106,33 @@ login page.
   out, or restart the web service (counters are in-memory unless Redis is
   configured).
 
+## Troubleshooting an empty token list
+
+The dashboard and **Token scanner** page show five health indicators — **Engine
+Running · RPC Connected · Scanner Active · Last Scan · Tokens Detected** — plus
+the exact reason when detection is impaired. Read them top-to-bottom:
+
+- **Engine Running = Offline.** The `pumptrader-engine` worker isn't running (or
+  can't reach the database). Confirm the worker is deployed and shares the web
+  service's `DATABASE_URL`. Nothing is detected while the engine is down.
+- **RPC Connected shows "public"** (amber) **and Scanner Active = Polling.** You
+  didn't set `SOLANA_RPC_URL`, so the engine is on the public mainnet endpoint.
+  It **rejects the realtime scanner websocket (HTTP 403)** and rate-limits
+  polling, so the token list stays empty or nearly so. **Fix:** set
+  `SOLANA_RPC_URL` (and ideally `SOLANA_WS_URL`) on **both** services to a
+  dedicated provider — a free [Helius](https://helius.dev) key works — then
+  redeploy. This is the most common cause of an empty list.
+- **Scanner RPC error banner.** The RPC is unreachable or rate-limiting; the
+  exact message is shown and logged (source `scanner`). Check the RPC URL/limits.
+- **All green but Tokens Detected = 0.** The scanner is healthy and simply hasn't
+  seen a migration in the current window — Pump.fun → Raydium migrations are
+  intermittent. New coins appear as they migrate. The engine also logs a
+  periodic `[scanner] No migrations detected yet, but the scanner is active…`
+  line so you can confirm it's working during quiet periods.
+
+Detection runs in **paper mode** too — it does not depend on live trading being
+enabled, so tokens populate the list as soon as the scanner has a working RPC.
+
 ## Notes
 
 - **Plans:** the engine worker runs 24/7; Render free-tier web services spin

@@ -65,6 +65,19 @@ const MIN_AGE_BEFORE_BUY_S = 90; // let post-migration chaos settle first
 const ARCHIVE_AFTER_DAYS = parseInt(process.env.ARCHIVE_AFTER_DAYS ?? "14", 10);
 const RPC_FAIL_THRESHOLD = 3; // consecutive health-probe failures → failover
 
+// Set by the console.error interceptor (bottom of file) whenever @solana/web3.js
+// reports a websocket failure. Read by publishHealth() to derive wsConnected:
+// on the public RPC the migration-authority subscription is rejected (403) and
+// this keeps updating, so wsConnected stays false and the dashboard shows why
+// realtime detection isn't working.
+let lastWsErrorAt = 0;
+
+/** The public mainnet endpoint: reachable over HTTP but rejects the websocket
+ *  subscriptions the realtime scanner needs, and rate-limits polling. */
+function isPublicRpc(url: string | undefined): boolean {
+  return !!url && /api\.mainnet-beta\.solana\.com/.test(url);
+}
+
 interface WatchedToken {
   tokenId: string;
   mint: string;
@@ -140,6 +153,10 @@ class TradingEngine {
     logger.info("engine", `recovered ${openPositions} open position(s), ${recent.length} watched token(s)`);
 
     await this.scanner.start();
+    // Loud, one-time self-test so an empty token list always has a logged
+    // reason (RPC unreachable? public endpoint? rate-limited?) rather than
+    // failing silently.
+    void this.runScannerDiagnostic();
     // Control fast path via Redis pub/sub when configured; the state tick
     // below polls the DB control queue either way, so Redis is optional.
     this.unsubscribeControl = subscribe(CHANNELS.control, (msg) => void this.onControl(msg));
@@ -246,10 +263,16 @@ class TradingEngine {
     const cutoff = Date.now() - 60_000;
     this.scanTimestamps = this.scanTimestamps.filter((t) => t > cutoff);
     const mem = process.memoryUsage();
+    const rpcUrl = this.rpcUrls[this.rpcIndex];
+    const tokensDetected = await prisma.detectedToken.count().catch(() => undefined);
+    // No ws error in the last 90s → treat the realtime subscription as healthy.
+    // On the public RPC the 403 recurs, so this stays false and the dashboard
+    // shows the scanner is running on the polling path only.
+    const wsConnected = lastWsErrorAt === 0 ? this.scanner.hasSubscription : Date.now() - lastWsErrorAt > 90_000;
 
     await updateEngineState({
       health: {
-        rpcUrl: this.rpcUrls[this.rpcIndex],
+        rpcUrl,
         rpcLatencyMs,
         rpcFailures: this.rpcFailures,
         scannerLastEventAt: this.scanner.lastActivityAt,
@@ -258,8 +281,18 @@ class TradingEngine {
         lastTradeAt: this.lastTradeAt,
         rssMb: Math.round(mem.rss / 1024 / 1024),
         heapMb: Math.round(mem.heapUsed / 1024 / 1024),
+        scannerSubscribed: this.scanner.hasSubscription,
+        lastScanAt: this.scanner.lastPollAt,
+        lastPollCount: this.scanner.lastPollCount,
+        wsConnected,
+        usingPublicRpc: isPublicRpc(rpcUrl),
+        tokensDetected,
+        scannerError: this.scanner.lastPollError,
       },
     }).catch(() => {});
+
+    // Keep an explanation in the logs while the list is empty.
+    void this.logIfNoDetections();
   }
 
   private async rotateRpc(): Promise<void> {
@@ -273,6 +306,64 @@ class TradingEngine {
   }
 
   // ── scanning & evaluation ─────────────────────────────────────────────────
+
+  /**
+   * One-time boot self-test for the scanner. Confirms the RPC can reach the
+   * Pump.fun migration authority over HTTP (the polling path), and warns loudly
+   * when running on the public endpoint, whose websocket the realtime scanner
+   * cannot use. Every outcome is logged so an empty token list is explainable.
+   */
+  private async runScannerDiagnostic(): Promise<void> {
+    const rpcUrl = this.rpcUrls[this.rpcIndex];
+    const usingPublic = isPublicRpc(rpcUrl);
+    try {
+      const count = await this.scanner.probe();
+      logger.info(
+        "scanner",
+        `scanner online — polling path reachable (RPC ${rpcUrl} returned ${count} recent migration-authority signatures). ` +
+          `New Pump.fun→Raydium migrations will appear here as they happen.`
+      );
+    } catch (e) {
+      logger.error(
+        "scanner",
+        `scanner cannot reach the migration authority over RPC (${rpcUrl}): ${(e as Error).message}. ` +
+          `No tokens will be detected until the RPC is reachable — check SOLANA_RPC_URL / rate limits.`
+      );
+    }
+    if (usingPublic) {
+      logger.warn(
+        "scanner",
+        "Using the PUBLIC Solana RPC (api.mainnet-beta.solana.com). It rejects the realtime " +
+          "websocket subscription the scanner uses (HTTP 403) and rate-limits polling, so token " +
+          "detection will be slow or empty. Set SOLANA_RPC_URL (and SOLANA_WS_URL) to a dedicated " +
+          "provider — e.g. a free Helius key — on BOTH the web and engine services for reliable scanning."
+      );
+    }
+  }
+
+  /** Throttled reminder that explains a persistently empty token list. */
+  private lastEmptyReasonLogAt = 0;
+  private async logIfNoDetections(): Promise<void> {
+    if (this.scanner.totalDetected > 0) return;
+    if (Date.now() - this.lastEmptyReasonLogAt < 10 * 60_000) return;
+    this.lastEmptyReasonLogAt = Date.now();
+    const rpcUrl = this.rpcUrls[this.rpcIndex];
+    const polledOk = this.scanner.lastPollAt != null && this.scanner.lastPollError == null;
+    if (!polledOk) {
+      logger.warn(
+        "scanner",
+        `No tokens detected yet. Scanner poll is failing: ${this.scanner.lastPollError ?? "no poll completed"} ` +
+          `(RPC ${rpcUrl}). ${isPublicRpc(rpcUrl) ? "Set a dedicated SOLANA_RPC_URL." : "Check RPC reachability/limits."}`
+      );
+    } else {
+      logger.info(
+        "scanner",
+        `No migrations detected yet, but the scanner is active (last poll returned ${this.scanner.lastPollCount} ` +
+          `authority signatures). This is normal during quiet periods; a new coin appears here when one migrates.` +
+          (isPublicRpc(rpcUrl) ? " Detection is degraded on the public RPC — set SOLANA_RPC_URL for realtime scanning." : "")
+      );
+    }
+  }
 
   private async onMigration(e: MigrationEvent): Promise<void> {
     if (this.watchlist.has(e.mint)) return;
@@ -948,7 +1039,6 @@ function normalizeDelta(d: Record<string, number | undefined>) {
 // other console.error passes through untouched (the health probe still
 // surfaces RPC trouble on the dashboard).
 const rawConsoleError = console.error.bind(console);
-let lastWsErrorAt = 0;
 console.error = (...args: unknown[]) => {
   if (typeof args[0] === "string" && args[0].startsWith("ws error")) {
     if (Date.now() - lastWsErrorAt < 60_000) return;

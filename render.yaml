@@ -39,7 +39,7 @@ services:
       # only if your direct host differs by more than that.
       - key: WALLET_ENCRYPTION_KEY # OPTIONAL — needed only to import a live-trading wallet. openssl rand -hex 32
         sync: false
-      - key: SOLANA_RPC_URL # OPTIONAL — dedicated RPC recommended (Helius/QuickNode). Defaults to public mainnet.
+      - key: SOLANA_RPC_URL # NEEDED FOR SCANNING (see the worker note below). Defaults to public mainnet, which won't detect tokens reliably.
         sync: false
 
   # ── Worker: the trading engine (runs 24/7) ───────────────────────────────
@@ -53,9 +53,10 @@ services:
         sync: false
       - key: WALLET_ENCRYPTION_KEY # must match the web service. Required only for LIVE trading.
         sync: false
-      - key: SOLANA_RPC_URL # OPTIONAL — defaults to public mainnet (rate-limited).
-        sync: false
-      - key: SOLANA_WS_URL # OPTIONAL — wss endpoint for the migration scanner.
+      - key: SOLANA_RPC_URL # NEEDED FOR SCANNING. The public default rejects the
+        sync: false #          scanner websocket (403) and rate-limits polling, so
+        #                      the token list stays empty. Use Helius/QuickNode/Triton.
+      - key: SOLANA_WS_URL # Recommended with SOLANA_RPC_URL — wss endpoint for realtime detection.
         sync: false
       - key: HELIUS_API_KEY # OPTIONAL — enables holder-count metrics.
         sync: false
