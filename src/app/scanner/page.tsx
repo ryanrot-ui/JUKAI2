@@ -36,12 +36,16 @@ interface TokenRow {
   critical: boolean;
   breakdown: MetricRow[] | null;
   snapshot: {
+    at?: string;
     priceUsd: number | null;
     liquiditySol: number | null;
     marketCapUsd: number | null;
     holderCount: number | null;
   } | null;
 }
+
+/** Engine constant (src/engine): how long a detected token stays watched. */
+const WATCH_WINDOW_MS = 45 * 60_000;
 
 interface TokenDetail {
   snapshots: Array<{ at: string; priceUsd: number | null; volume5mUsd: number | null }>;
@@ -51,6 +55,7 @@ interface TokenDetail {
 export default function ScannerPage() {
   const { data: tokens } = usePoll<TokenRow[]>("/api/tokens?limit=100", 8000);
   const { data: health } = usePoll<Health>("/api/health", 10_000);
+  const { data: settings } = usePoll<{ confidenceThreshold?: number }>("/api/settings", 60_000);
   const [selected, setSelected] = useState<string | null>(null);
   const [filter, setFilter] = useState<string>("all");
 
@@ -125,7 +130,12 @@ export default function ScannerPage() {
         </table>
       </div>
 
-      {selected && <TokenDrawer token={filtered.find((t) => t.mint === selected) ?? null} />}
+      {selected && (
+        <TokenDrawer
+          token={filtered.find((t) => t.mint === selected) ?? null}
+          threshold={settings?.confidenceThreshold ?? null}
+        />
+      )}
     </AppShell>
   );
 }
@@ -218,8 +228,19 @@ function TokenTableRow({ t, onClick }: { t: TokenRow; onClick: () => void }) {
             <div className="flex items-center gap-1.5 text-[10px] text-slate-600 font-mono">
               {shortMint(t.mint)}
               <CopyButton text={t.mint} />
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onClick();
+                }}
+                title="Full analysis: score math, every rule, decision reasoning"
+                className="text-accent hover:underline"
+              >
+                Analysis
+              </button>
               <ExtLink href={`https://pump.fun/coin/${t.mint}`} label="Pump" />
               <ExtLink href={`https://dexscreener.com/solana/${t.mint}`} label="DexScr" />
+              <ExtLink href={`https://gmgn.ai/sol/token/${t.mint}`} label="GMGN" />
               <ExtLink href={`https://solscan.io/token/${t.mint}`} label="Solscan" />
               <ExtLink href={t.twitterUrl ?? `https://x.com/search?q=${t.mint}`} label="X" />
               {t.telegramUrl && <ExtLink href={t.telegramUrl} label="TG" />}
@@ -293,7 +314,85 @@ function TokenTableRow({ t, onClick }: { t: TokenRow; onClick: () => void }) {
   );
 }
 
-function TokenDrawer({ token }: { token: TokenRow | null }) {
+/**
+ * The decision, made auditable: score vs threshold, suggested action with the
+ * reasoning, whether the token is still monitored, when it was last
+ * evaluated, and which inputs were missing (scored neutral).
+ */
+function DecisionPanel({ token, threshold }: { token: TokenRow; threshold: number | null }) {
+  const score = token.score;
+  const inWindow = Date.now() - new Date(token.migratedAt).getTime() < WATCH_WINDOW_MS;
+  const monitored =
+    token.verdict === "BOUGHT" || (inWindow && token.verdict !== "IGNORED");
+  const neutral = (token.breakdown ?? []).filter((m) => m.value === 0.5).map((m) => m.metric);
+
+  const action: { label: string; cls: string; why: string } =
+    token.verdict === "BOUGHT"
+      ? { label: "BOUGHT", cls: "bg-profit/20 text-profit", why: "Passed every rule — the engine opened a position." }
+      : token.verdict === "BUY_CANDIDATE"
+        ? { label: "BUY CANDIDATE", cls: "bg-profit/20 text-profit", why: "Passed every rule; awaiting execution/risk checks." }
+        : token.verdict == null
+          ? { label: "WATCH", cls: "bg-warn/10 text-warn", why: "Still inside the evaluation window — data may not be fully indexed yet." }
+          : token.verdict === "IGNORED"
+            ? { label: "EXPIRED", cls: "bg-surface-overlay text-slate-500", why: "The 45-minute watch window ended without a qualifying setup." }
+            : token.critical
+              ? { label: "AVOID", cls: "bg-loss/20 text-loss", why: "A critical risk flag fired — this blocks buying outright." }
+              : score != null && threshold != null && score >= threshold
+                ? { label: "WATCH", cls: "bg-warn/10 text-warn", why: "Score cleared the threshold but a hard rule failed (see below)." }
+                : { label: "AVOID", cls: "bg-loss/20 text-loss", why: "Score below the acceptance threshold and/or hard rules failed." };
+
+  const summary =
+    `Scored ${score ?? "—"}/100${threshold != null ? ` against a ≥${threshold} acceptance threshold` : ""}. ` +
+    (token.verdict === "REJECTED"
+      ? `Rejected: ${token.rejectionReasons.slice(0, 3).join("; ") || "see rules below"}.`
+      : token.verdict === "BOUGHT" || token.verdict === "BUY_CANDIDATE"
+        ? `Accepted — ${token.greenFlags.slice(0, 3).join("; ") || "all rules passed"}.`
+        : token.verdict === "IGNORED"
+          ? "No decision was reached before the watch window expired."
+          : "Evaluation in progress.") +
+    (neutral.length > 0 ? ` ${neutral.length} input(s) had no data and scored neutral.` : "");
+
+  return (
+    <div className="rounded-lg border border-surface-border bg-surface-overlay/30 p-3 mb-3">
+      <div className="flex items-center gap-3 flex-wrap mb-2">
+        <span className={`text-xs px-2 py-0.5 rounded font-medium ${action.cls}`}>{action.label}</span>
+        <div className="flex-1 min-w-[140px]">
+          <div className="h-2 bg-surface-overlay rounded-full overflow-hidden relative">
+            <div
+              className={`h-full rounded-full ${score != null && score >= 70 ? "bg-profit" : score != null && score >= 40 ? "bg-warn" : "bg-loss"}`}
+              style={{ width: `${score ?? 0}%` }}
+            />
+            {threshold != null && (
+              <div
+                className="absolute top-0 bottom-0 w-0.5 bg-slate-400"
+                style={{ left: `${threshold}%` }}
+                title={`Acceptance threshold: ${threshold}`}
+              />
+            )}
+          </div>
+        </div>
+        <span className="font-mono text-xs text-slate-400">
+          {score ?? "—"}/100{threshold != null ? ` (needs ≥${threshold})` : ""}
+        </span>
+      </div>
+      <p className="text-xs text-slate-400 mb-1">{action.why}</p>
+      <p className="text-xs text-slate-500">{summary}</p>
+      <div className="flex gap-4 mt-2 text-[10px] text-slate-600">
+        <span title="Tokens are re-evaluated continuously inside the 45-minute watch window.">
+          {monitored ? "● Monitoring live" : "○ No longer monitored"}
+        </span>
+        {token.snapshot?.at && <span>last evaluated {timeAgo(token.snapshot.at)} ago</span>}
+        {neutral.length > 0 && (
+          <span title={`No data for: ${neutral.join(", ")} — these scored neutral (0.5), never bullish.`}>
+            {neutral.length} input(s) missing data
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TokenDrawer({ token, threshold }: { token: TokenRow | null; threshold: number | null }) {
   const { data: detail } = usePoll<TokenDetail>(
     token ? `/api/tokens/${token.mint}` : "/api/tokens?limit=0",
     10_000
@@ -317,6 +416,7 @@ function TokenDrawer({ token }: { token: TokenRow | null }) {
     { label: "Pump.fun", href: `https://pump.fun/coin/${token.mint}` },
     { label: "DexScreener", href: `https://dexscreener.com/solana/${token.mint}` },
     { label: "Raydium", href: `https://raydium.io/swap/?inputMint=sol&outputMint=${token.mint}` },
+    { label: "GMGN", href: `https://gmgn.ai/sol/token/${token.mint}` },
     { label: "Solscan", href: `https://solscan.io/token/${token.mint}` },
     { label: "Birdeye", href: `https://birdeye.so/token/${token.mint}?chain=solana` },
     { label: "X", href: token.twitterUrl ?? `https://x.com/search?q=${token.mint}` },
@@ -370,6 +470,8 @@ function TokenDrawer({ token }: { token: TokenRow | null }) {
         <div><div className="stat-label">Liquidity</div><div className="font-mono text-slate-300">{token.snapshot?.liquiditySol ? `${token.snapshot.liquiditySol.toFixed(0)} SOL` : "—"}</div></div>
         <div><div className="stat-label">Holders</div><div className="font-mono text-slate-300">{token.snapshot?.holderCount ?? "—"}</div></div>
       </div>
+
+      <DecisionPanel token={token} threshold={threshold} />
 
       <PriceChart points={points} markers={markers} />
 
