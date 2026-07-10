@@ -18,6 +18,16 @@
 >   engine-worker banner is suppressed while the DB is down, and the Engine
 >   indicator shows "Unknown" — heartbeats live in the DB, so engine state is
 >   unknowable during the outage.
+> - **Deployment misconfiguration is now self-diagnosing.** A production
+>   worker was found running the *web* image (`Dockerfile` instead of
+>   `Dockerfile.engine`), silently serving a second dashboard with no engine.
+>   Both entrypoints now check Render's `RENDER_SERVICE_TYPE` and exit with
+>   the exact setting to change when booted on the wrong service type.
+>   `render.yaml` additionally provisions a managed Render PostgreSQL and
+>   wires `DATABASE_URL` into both services via `fromDatabase`, removing the
+>   dependency on an external free-tier database that can suspend mid-month
+>   (the original Neon `P1001` outage) and the hand-pasted env vars that were
+>   lost during service reconfiguration.
 > - **Manual-trade `amountSol` is now server-derived.** The submit endpoint
 >   previously recorded a client-supplied `amountSol` in trade history (the
 >   last client-controlled field there). The build step now registers it with
