@@ -15,7 +15,10 @@ import {
   getTokenPriceUsd,
 } from "./analysis/collectors";
 import { scoreToken, DEFAULT_WEIGHTS } from "./analysis/scoring";
+import type { ScoreResult, TokenMetrics } from "./analysis/types";
 import { MigrationScanner, type MigrationEvent } from "./scanner/migrationScanner";
+import { RpcHealthTracker } from "./rpc/health";
+import { generateStrategyReport } from "./learning/reporter";
 import { dbResilience, isTransientDbError } from "./db/resilience";
 import { evaluateBuyRules } from "./trading/rules";
 import { checkRisk } from "./trading/riskManager";
@@ -84,6 +87,7 @@ interface WatchedToken {
   tokenId: string;
   mint: string;
   migratedAt: Date;
+  detectedAt: Date;
   evaluating: boolean;
 }
 
@@ -91,6 +95,7 @@ class TradingEngine {
   private rpcUrls = rpcEndpoints();
   private rpcIndex = 0;
   private rpcFailures = 0;
+  private rpcHealth = new RpcHealthTracker(rpcEndpoints());
   private conn = this.makeConnection();
 
   private config = new LiveConfig();
@@ -115,7 +120,19 @@ class TradingEngine {
     this.scanner = new MigrationScanner(
       this.conn,
       (e) => this.onMigration(e),
-      (err, ctx) => logger.error("scanner", `${ctx}: ${err.message}`)
+      (err, ctx) => {
+        logger.error("scanner", `${ctx}: ${err.message}`);
+        // Scanner RPC trouble (poll timeouts survive their own retries before
+        // landing here) counts against the endpoint's health, and repeated
+        // failures trigger the same failover as the health probe.
+        this.rpcHealth.recordFailure(this.rpcUrls[this.rpcIndex], err);
+        if (
+          this.rpcHealth.consecutiveFailures(this.rpcUrls[this.rpcIndex]) >= RPC_FAIL_THRESHOLD &&
+          this.rpcUrls.length > 1
+        ) {
+          void this.rotateRpc(`scanner ${ctx}: ${err.message}`);
+        }
+      }
     );
   }
 
@@ -139,6 +156,7 @@ class TradingEngine {
           tokenId,
           mint: d.mint,
           migratedAt: d.migratedAt,
+          detectedAt: new Date(),
           evaluating: false,
         });
       }
@@ -210,6 +228,7 @@ class TradingEngine {
         tokenId: t.id,
         mint: t.mint,
         migratedAt: t.migratedAt,
+        detectedAt: t.detectedAt,
         evaluating: false,
       });
     }
@@ -311,11 +330,13 @@ class TradingEngine {
       await this.conn.getSlot("confirmed");
       rpcLatencyMs = Date.now() - t0;
       this.rpcFailures = 0;
-    } catch {
+      this.rpcHealth.recordSuccess(this.rpcUrls[this.rpcIndex], rpcLatencyMs);
+    } catch (probeErr) {
       this.rpcFailures++;
+      this.rpcHealth.recordFailure(this.rpcUrls[this.rpcIndex], probeErr);
       logger.warn("engine", `RPC health probe failed (${this.rpcFailures}/${RPC_FAIL_THRESHOLD})`);
       if (this.rpcFailures >= RPC_FAIL_THRESHOLD && this.rpcUrls.length > 1) {
-        await this.rotateRpc();
+        await this.rotateRpc(`health probe failed ${this.rpcFailures}×`);
       }
     }
 
@@ -349,6 +370,7 @@ class TradingEngine {
         tokensDetected,
         scannerError: this.scanner.lastPollError,
         settingsLoadedAt: this.config.loadedSettingsUpdatedAtMs,
+        ...this.rpcHealth.snapshot(rpcUrl),
         ...dbResilience.snapshot(),
       },
     }).catch(() => {});
@@ -357,14 +379,26 @@ class TradingEngine {
     void this.logIfNoDetections();
   }
 
-  private async rotateRpc(): Promise<void> {
-    this.rpcIndex = (this.rpcIndex + 1) % this.rpcUrls.length;
+  private lastFailoverAt = 0;
+  private async rotateRpc(reason = "unspecified"): Promise<void> {
+    // Debounce: the probe and the scanner can both hit the threshold in the
+    // same window; one failover per 30s is enough.
+    if (Date.now() - this.lastFailoverAt < 30_000) return;
+    this.lastFailoverAt = Date.now();
+    const from = this.rpcUrls[this.rpcIndex];
+    // Health-scored failover: switch to the healthiest alternative, not just
+    // the next in line — a flapping endpoint isn't re-chosen while a better
+    // one exists.
+    const to = this.rpcHealth.bestAlternative(from);
+    if (!to) return;
+    this.rpcIndex = Math.max(0, this.rpcUrls.indexOf(to));
     this.rpcFailures = 0;
+    this.rpcHealth.recordFailover(from, to, reason);
     this.conn = this.makeConnection();
     this.liveExecutor = null; // rebuild against the new connection on demand
     await this.scanner.setConnection(this.conn);
-    logger.warn("engine", `RPC failover → ${this.rpcUrls[this.rpcIndex]}`);
-    void notify("error", "RPC failover", `Switched to ${this.rpcUrls[this.rpcIndex]}`);
+    logger.warn("engine", `RPC failover → ${to} (${reason})`);
+    void notify("error", "RPC failover", `Switched to ${to}\nReason: ${reason}`);
   }
 
   // ── scanning & evaluation ─────────────────────────────────────────────────
@@ -462,16 +496,22 @@ class TradingEngine {
         tokenId: token.id,
         mint: e.mint,
         migratedAt: e.migratedAt,
+        detectedAt: token.detectedAt,
         evaluating: false,
       });
       await this.bumpDaily({ scanned: 1 });
-      const meta: Record<string, unknown> = { pool: e.poolAddress, signature: e.signature };
+      const detectionDelayMs = Date.now() - e.migratedAt.getTime();
+      const meta: Record<string, unknown> = {
+        pool: e.poolAddress,
+        signature: e.signature,
+        detectionDelayMs,
+      };
       if (process.env.SCANNER_DEBUG === "1") {
         meta.totalTokenRows = await prisma.detectedToken.count().catch(() => undefined);
       }
       logger.info(
         "scanner",
-        `migration detected: ${e.mint}${existing ? " (already in DB, re-watching)" : " (inserted)"}`,
+        `migration detected: ${e.mint} (${(detectionDelayMs / 1000).toFixed(1)}s after migration)${existing ? " (already in DB, re-watching)" : ""}`,
         meta
       );
     } catch (err) {
@@ -529,9 +569,11 @@ class TradingEngine {
       }
 
       const settings = this.config.get();
+      const evalStartedAt = Date.now();
       const metrics = await collectMetrics(this.conn, t.mint, t.migratedAt);
       const weights = settings.scoringWeights ?? DEFAULT_WEIGHTS;
       const score = scoreToken(metrics, weights);
+      const scoredMs = Date.now() - evalStartedAt;
 
       // Sanitize numerics before persisting: a NaN/Infinity from upstream
       // arithmetic (e.g. a division on partial API data) must become null,
@@ -668,7 +710,7 @@ class TradingEngine {
         logger.info("risk", `read-only mode: would have bought ${t.mint.slice(0, 8)}… (score ${score.total})`);
         return;
       }
-      await this.tryBuy(t, metrics.priceUsd, metrics.symbol, score.total, score.explanation, decision.reasons, narrativeReport);
+      await this.tryBuy(t, metrics, score, decision.reasons, narrativeReport, scoredMs);
     } catch (e) {
       const err = e as Error & { code?: string; meta?: unknown };
       // Database dropped mid-write: open the circuit (one structured status
@@ -708,15 +750,43 @@ class TradingEngine {
 
   private async tryBuy(
     t: WatchedToken,
-    priceUsd: number | null,
-    symbol: string | null,
-    score: number,
-    scoreExplanation: string,
+    metrics: TokenMetrics,
+    score: ScoreResult,
     reasons: string[],
-    narrativeReport: NarrativeReport | null
+    narrativeReport: NarrativeReport | null,
+    scoredMs: number
   ): Promise<void> {
     const settings = this.config.get();
-    const entryReason = `score ${score}: ${reasons.join("; ")}`;
+    const priceUsd = metrics.priceUsd;
+    const symbol = metrics.symbol;
+    const entryReason = `score ${score.total}: ${reasons.join("; ")}`;
+
+    // Entry snapshot for the learning analytics: per-metric scoring values,
+    // the market context the trade was taken in, and full timing telemetry.
+    // The optimizer correlates all of it against the realized outcome.
+    const entrySignals = {
+      ...(narrativeReport
+        ? entrySignalsPayload(score.total, narrativeReport)
+        : { scannerScore: score.total }),
+      metrics: Object.fromEntries(score.metrics.map((m) => [m.metric, m.value])),
+      context: {
+        marketCapUsd: metrics.marketCapUsd,
+        liquiditySol: metrics.liquiditySol,
+        volume5mUsd: metrics.volume5mUsd,
+        buySellRatio: metrics.buySellRatio,
+        momentum: metrics.momentum,
+        momentumAcceleration: metrics.momentumAcceleration,
+        priceChange5mPct: metrics.priceChange5mPct,
+        priceChange1hPct: metrics.priceChange1hPct,
+        holderCount: metrics.holderCount,
+        tokenAgeMin: (Date.now() - t.migratedAt.getTime()) / 60_000,
+        detectionToBuyMs: Date.now() - t.detectedAt.getTime(),
+      },
+      timing: {
+        migrationToDetectionMs: t.detectedAt.getTime() - t.migratedAt.getTime(),
+        scoredMs,
+      },
+    };
 
     // Critical section: risk check + position reservation are serialized so
     // concurrent evaluations can never over-commit exposure, and the
@@ -754,13 +824,11 @@ class TradingEngine {
             peakPriceUsd: priceUsd,
             tokenQty: 0, // reserved; set after the swap fills
             entryReason,
-            scannerScore: score,
-            scoreExplanation,
+            scannerScore: score.total,
+            scoreExplanation: score.explanation,
             // Signal snapshot at entry — compared with the outcome by the
-            // learning analytics (/api/signals).
-            entrySignals: narrativeReport
-              ? JSON.parse(JSON.stringify(entrySignalsPayload(score, narrativeReport)))
-              : { scannerScore: score },
+            // learning analytics (optimizer + strategy reports).
+            entrySignals: JSON.parse(JSON.stringify(entrySignals)),
           },
         });
       } catch (e) {
@@ -826,10 +894,19 @@ class TradingEngine {
       forgetToken(t.mint);
       this.lastTradeAt = Date.now();
 
+      // Entry timing diagnostics: every stage of detection→execution, so a
+      // slow entry is attributable to its actual bottleneck.
+      const migrationToDetectionMs = t.detectedAt.getTime() - t.migratedAt.getTime();
+      const totalDelayMs = Date.now() - t.detectedAt.getTime();
       logger.info(
         "executor",
-        `BUY ${t.mint.slice(0, 8)}… ${reservation.entrySol} SOL (${result.paper ? "paper" : "live"}, ${latencyMs}ms, ${attempts} attempt(s))`,
-        { signature: result.signature, reason: entryReason }
+        `BUY ${t.mint.slice(0, 8)}… ${reservation.entrySol} SOL (${result.paper ? "paper" : "live"}, ${attempts} attempt(s)) — ` +
+          `migration detected: ${migrationToDetectionMs}ms | token scored: ${scoredMs}ms | buy executed: ${latencyMs}ms | total detection→fill: ${totalDelayMs}ms`,
+        {
+          signature: result.signature,
+          reason: entryReason,
+          timing: { migrationToDetectionMs, scoredMs, buyExecutedMs: latencyMs, totalDelayMs },
+        }
       );
       void notify(
         "buy",
@@ -1112,6 +1189,7 @@ class TradingEngine {
         losses: pnlSol <= 0 ? 1 : 0,
       });
       this.lastTradeAt = Date.now();
+      if (soldAll) void this.maybeGenerateStrategyReport();
 
       logger.info("executor", `SELL ${p.mint.slice(0, 8)}… ${kind} pnl ${pnlSol.toFixed(4)} SOL (${latencyMs}ms)`, {
         reason,
@@ -1135,6 +1213,37 @@ class TradingEngine {
     } finally {
       this.selling.delete(positionId);
       this.lastNarrativeCheck.delete(positionId);
+    }
+  }
+
+  /**
+   * Auto strategy report: every `reportEveryTrades` fully-closed trades,
+   * generate the full analytics report (and auto-rebalance scoring weights
+   * when enabled). Cheap check — one count + one findFirst — then the heavy
+   * work runs at most once per threshold crossing.
+   */
+  private reportGenerating = false;
+  private async maybeGenerateStrategyReport(): Promise<void> {
+    if (this.reportGenerating || !dbResilience.healthy) return;
+    this.reportGenerating = true;
+    try {
+      const settings = this.config.get();
+      const [closedCount, lastReport] = await Promise.all([
+        prisma.position.count({ where: { status: "CLOSED" } }),
+        prisma.strategyReport.findFirst({ where: { trigger: "auto" }, orderBy: { at: "desc" } }),
+      ]);
+      const sinceLast = closedCount - (lastReport?.tradesAnalyzed ?? 0);
+      if (sinceLast < settings.reportEveryTrades) return;
+      await generateStrategyReport({
+        mode: "all",
+        trigger: "auto",
+        autoApplyWeights: settings.autoRebalanceWeights,
+      });
+    } catch (e) {
+      if (isTransientDbError(e)) dbResilience.recordFailure(e);
+      else logger.warn("engine", `strategy report generation failed: ${(e as Error).message}`);
+    } finally {
+      this.reportGenerating = false;
     }
   }
 
