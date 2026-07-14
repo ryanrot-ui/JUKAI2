@@ -29,6 +29,7 @@ import {
   type FrequencyHealth,
 } from "./learning/frequency";
 import { monitorMissedOpportunities, recordMissedOpportunity } from "./learning/missed";
+import { getSmartMoneyReading, gradeWalletEvents, smartMoneyDelta } from "./learning/smartMoney";
 import type { ClosedTrade } from "./learning/tradeStats";
 import { classifyRegime, type RegimeResult } from "./learning/regime";
 import { recordShadowTrade, resolveShadowTrades } from "./learning/shadow";
@@ -247,6 +248,12 @@ class TradingEngine {
       setInterval(() => {
         if (dbResilience.healthy) void monitorMissedOpportunities().catch(() => {});
       }, 5 * 60_000)
+    );
+    // Smart-money grading: hourly, score wallets against graded outcomes.
+    this.timers.push(
+      setInterval(() => {
+        if (dbResilience.healthy) void gradeWalletEvents().catch(() => {});
+      }, 60 * 60_000)
     );
     void this.computeRegime();
     void this.refreshLearningState();
@@ -772,6 +779,16 @@ class TradingEngine {
         logger.warn("scoring", `narrative evaluation failed for ${t.mint.slice(0, 8)}…: ${(e as Error).message}`);
       }
 
+      // Smart money (Phase 4): when historically profitable wallets bought
+      // this token, add a SMALL bounded bonus (max +8). One component among
+      // many — never a gate, never negative, inert without HELIUS_API_KEY.
+      const smart = dbResilience.healthy ? await getSmartMoneyReading(t.mint).catch(() => null) : null;
+      const smartAdj = smartMoneyDelta(smart);
+      if (smartAdj.delta > 0) {
+        score.total = Math.min(100, score.total + smartAdj.delta);
+        score.explanation += ` Smart money +${smartAdj.delta} (${smartAdj.detail}).`;
+      }
+
       // Market-quality-adaptive threshold: good markets allow more trades,
       // poor markets demand more. Bounded ±7 points; disable via settings.
       const shift = settings.adaptiveThreshold ? this.thresholdShift : { delta: 0, reason: "adaptive threshold disabled" };
@@ -784,6 +801,15 @@ class TradingEngine {
           : settings;
 
       const decision = evaluateBuyRules(metrics, score, effSettings, narrativeReport);
+      decision.trace.push({
+        rule: "smart money",
+        layer: "opportunity",
+        hard: false,
+        passed: true,
+        detail: smart
+          ? `${smartAdj.delta > 0 ? `+${smartAdj.delta} — ` : ""}${smartAdj.detail}`
+          : "inactive (requires HELIUS_API_KEY) — scored neutral",
+      });
       decision.trace.push({
         rule: "market-adaptive threshold",
         layer: "opportunity",
@@ -970,7 +996,9 @@ class TradingEngine {
     // Entry snapshot for the learning analytics: per-metric scoring values,
     // the market context the trade was taken in, and full timing telemetry.
     // The optimizer correlates all of it against the realized outcome.
+    const smartAtEntry = await getSmartMoneyReading(t.mint).catch(() => null); // cache hit
     const entrySignals = {
+      smartMoney: smartAtEntry ? JSON.parse(JSON.stringify(smartAtEntry)) : null,
       ...(narrativeReport
         ? entrySignalsPayload(score.total, narrativeReport)
         : { scannerScore: score.total }),

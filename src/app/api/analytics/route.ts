@@ -48,6 +48,18 @@ async function handleGet(req: Request) {
     prisma.missedOpportunity.count({ where: { doneAt: null } }),
   ]);
 
+  // Phase 4: smart-money database status + top proven wallets
+  const [walletCount, gradedEvents, topWallets] = await Promise.all([
+    prisma.smartWallet.count(),
+    prisma.walletTokenEvent.count({ where: { graded: true } }),
+    prisma.smartWallet.findMany({
+      where: { tokensBought: { gte: 5 } },
+      orderBy: { score: "desc" },
+      take: 10,
+      select: { address: true, score: true, tokensBought: true, wins: true, rugs: true, avgTokenGainPct: true },
+    }),
+  ]);
+
   // Phase 2: grade every filter on rugs avoided vs winners missed
   const filterEffectiveness = computeFilterEffectiveness(missedDone);
   const topMissed = [...missedDone]
@@ -70,6 +82,12 @@ async function handleGet(req: Request) {
         : null,
       filterEffectiveness,
       topMissed,
+    },
+    smartMoney: {
+      enabled: !!process.env.HELIUS_API_KEY,
+      wallets: walletCount,
+      gradedEvents,
+      topWallets,
     },
   });
 }
