@@ -6,6 +6,9 @@ import { requireUser, unauthorized } from "@/lib/session";
 import { dbGuard } from "@/lib/dbGuard";
 import { loadClosedTrades } from "@/engine/learning/loadTrades";
 import { detectPatterns, MIN_RELEVANT_TRADES } from "@/engine/learning/patterns";
+import { validateFeatures, buildCalibration } from "@/engine/learning/featureValidation";
+import { compareShadowStrategy } from "@/engine/learning/shadow";
+import { getEngineState, type EngineHealth } from "@/lib/engineState";
 import { compareSettings, loadTokenSeries } from "@/engine/backtest/replay";
 import { settingsSchema, settingsUpdateSchema } from "@/lib/validation";
 import { DEFAULT_SETTINGS } from "@/engine/config";
@@ -47,7 +50,7 @@ async function handleGet(req: Request) {
   const { searchParams } = new URL(req.url);
   const mode = (searchParams.get("mode") ?? "all") as "paper" | "live" | "all";
 
-  const [reviews, trades, changes, settingsRow] = await Promise.all([
+  const [reviews, trades, changes, settingsRow, engineState] = await Promise.all([
     prisma.tradeReview.findMany({
       where: mode === "all" ? {} : { paper: mode === "paper" },
       orderBy: { at: "desc" },
@@ -56,6 +59,7 @@ async function handleGet(req: Request) {
     loadClosedTrades({ mode }),
     prisma.parameterChange.findMany({ orderBy: { at: "desc" }, take: 25 }),
     prisma.settings.findFirst({ orderBy: { updatedAt: "desc" } }),
+    getEngineState().catch(() => null),
   ]);
 
   // ── Lessons: win rate per objective condition tag ─────────────────────────
@@ -105,6 +109,10 @@ async function handleGet(req: Request) {
       })()
     : DEFAULT_SETTINGS;
   const patterns = detectPatterns(trades, currentSettings);
+  const featureValidation = validateFeatures(trades);
+  const calibration = buildCalibration(trades);
+  const shadow = await compareShadowStrategy(currentSettings.confidenceThreshold).catch(() => null);
+  const health = (engineState?.health ?? {}) as EngineHealth;
 
   // ── Win rate over time (rolling 20-trade window) ──────────────────────────
   const chron = [...trades].sort((a, b) => a.closedAt.getTime() - b.closedAt.getTime());
@@ -138,6 +146,14 @@ async function handleGet(req: Request) {
       tags: r.tags,
     })),
     patterns,
+    featureValidation,
+    calibration,
+    shadow,
+    regime: {
+      current: health.marketRegime ?? null,
+      detail: health.marketRegimeDetail ?? null,
+      shadowStrategyActive: health.shadowStrategyActive ?? false,
+    },
     parameterChanges: changes,
     winRateSeries,
   });

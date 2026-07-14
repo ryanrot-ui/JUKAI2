@@ -51,6 +51,7 @@ export interface ReviewInput {
       holderCount?: number | null;
       tokenAgeMin?: number | null;
       detectionToBuyMs?: number | null;
+      regime?: string | null;
     };
   } | null;
 }
@@ -82,6 +83,8 @@ export function deriveTags(r: ReviewInput): string[] {
   add(c.detectionToBuyMs != null && c.detectionToBuyMs > 120_000, "slow_pipeline_entry");
   add((r.entrySignals?.scannerScore ?? 0) >= 85, "score_85_plus");
   add((r.entrySignals?.scannerScore ?? 100) < 75, "score_under_75");
+  // market regime at entry → per-regime win rates in the lessons table
+  if (c.regime) tags.push(`regime_${c.regime}`);
   return tags;
 }
 

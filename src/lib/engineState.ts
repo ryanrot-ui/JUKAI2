@@ -40,6 +40,11 @@ export interface EngineHealth {
   scannerError?: string | null;
   /** updatedAt (epoch ms) of the settings row the engine currently runs on. */
   settingsLoadedAt?: number | null;
+  /** current market regime classification + why. */
+  marketRegime?: string | null;
+  marketRegimeDetail?: string | null;
+  /** true while a candidate (shadow) strategy is being evaluated. */
+  shadowStrategyActive?: boolean;
   // ── RPC endpoint health (per-endpoint scoring + failover history) ────────
   rpcEndpoints?: Array<{
     url: string;

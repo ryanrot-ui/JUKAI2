@@ -65,9 +65,44 @@ interface ParameterChangeRow {
   note: string | null;
 }
 
+interface FeatureStat {
+  feature: string;
+  samples: number;
+  correlation: number | null;
+  importancePct: number;
+  strongWinRate: number | null;
+  weakWinRate: number | null;
+  strongAvgReturnPct: number | null;
+  strongProfitFactor: number | null;
+  drift: string;
+  driftDetail: string | null;
+}
+
+interface StrategyLine {
+  trades: number;
+  winRate: number | null;
+  avgPnlPct: number | null;
+  profitFactorPct: number | null;
+  maxDrawdownPct: number | null;
+  totalPnlPct: number;
+}
+
 interface LearningData {
   reviewsStored: number;
   minRelevantTrades: number;
+  featureValidation: FeatureStat[];
+  calibration: { buckets: Array<{ label: string; trades: number; winRatePct: number }>; totalTrades: number };
+  shadow: {
+    activeSince: string | null;
+    opportunities: number;
+    minOpportunities: number;
+    ready: boolean;
+    live: StrategyLine;
+    candidate: StrategyLine;
+    candidateExtraTrades: number;
+    verdict: string;
+  } | null;
+  regime: { current: string | null; detail: string | null; shadowStrategyActive: boolean };
   lessons: Lesson[];
   topLossCauses: CauseAgg[];
   topWinCauses: CauseAgg[];
@@ -185,6 +220,144 @@ export default function LearningPage() {
                   </div>
                 )}
               </div>
+            </div>
+          </div>
+
+          {/* Regime + shadow strategy */}
+          <div className="grid lg:grid-cols-2 gap-4 mb-4">
+            <div className="card">
+              <div className="stat-label mb-2">Market regime</div>
+              {data.regime.current ? (
+                <>
+                  <div className="text-xl font-semibold text-slate-200">
+                    {data.regime.current.replace(/_/g, " ")}
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-1">{data.regime.detail}</p>
+                  <p className="text-[10px] text-slate-600 mt-2">
+                    Classified every 5 minutes from the scanner&apos;s own data; every entry is
+                    tagged with its regime, so the lessons table shows win rates per regime
+                    (regime_* rows).
+                  </p>
+                </>
+              ) : (
+                <p className="text-sm text-slate-600">Reported by the engine once it runs this version.</p>
+              )}
+            </div>
+            <div className="card">
+              <div className="stat-label mb-2">Shadow strategy — candidate vs live</div>
+              {data.shadow ? (
+                <>
+                  <table className="w-full text-xs mb-2">
+                    <thead>
+                      <tr className="text-left text-slate-500 border-b border-surface-border">
+                        <th className="pb-1 font-normal"> </th>
+                        <th className="pb-1 font-normal text-right">Trades</th>
+                        <th className="pb-1 font-normal text-right">Win %</th>
+                        <th className="pb-1 font-normal text-right">Avg %</th>
+                        <th className="pb-1 font-normal text-right">Total %</th>
+                        <th className="pb-1 font-normal text-right">Max DD</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(["live", "candidate"] as const).map((k) => {
+                        const l = data.shadow![k];
+                        return (
+                          <tr key={k} className="border-b border-surface-border/40">
+                            <td className="py-1 text-slate-300">{k === "live" ? "Live (executes)" : "Candidate (silent)"}</td>
+                            <td className="py-1 text-right text-slate-400">{l.trades}</td>
+                            <td className="py-1 text-right text-slate-400">{l.winRate?.toFixed(0) ?? "—"}%</td>
+                            <td className="py-1 text-right text-slate-400">{l.avgPnlPct != null ? `${l.avgPnlPct >= 0 ? "+" : ""}${l.avgPnlPct.toFixed(1)}` : "—"}</td>
+                            <td className={`py-1 text-right font-mono ${l.totalPnlPct > 0 ? "text-profit" : l.totalPnlPct < 0 ? "text-loss" : "text-slate-400"}`}>
+                              {l.totalPnlPct >= 0 ? "+" : ""}{l.totalPnlPct.toFixed(0)}
+                            </td>
+                            <td className="py-1 text-right text-slate-400">{l.maxDrawdownPct != null ? `-${l.maxDrawdownPct.toFixed(0)}%` : "—"}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  <p className="text-[11px] text-slate-500">{data.shadow.verdict}</p>
+                  <p className="text-[10px] text-slate-600 mt-1">
+                    {data.shadow.opportunities}/{data.shadow.minOpportunities} opportunities ·{" "}
+                    {data.shadow.candidateExtraTrades} hypothetical entries resolved on recorded data
+                  </p>
+                </>
+              ) : (
+                <p className="text-sm text-slate-600">
+                  Activates automatically once the optimizer produces recommended weights that
+                  differ from the live ones (needs {data.minRelevantTrades}+ closed trades). The
+                  candidate evaluates every opportunity silently — only the live strategy trades.
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* Feature validation + calibration */}
+          <div className="grid lg:grid-cols-3 gap-4 mb-4">
+            <div className="card lg:col-span-2">
+              <div className="stat-label mb-2">Feature importance — measured predictive power</div>
+              {data.featureValidation.length === 0 ? (
+                <p className="text-sm text-slate-600">Needs ≥30 closed trades with entry snapshots.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-left text-slate-500 border-b border-surface-border">
+                        <th className="pb-1 pr-2 font-normal">Feature</th>
+                        <th className="pb-1 pr-2 font-normal text-right">Importance</th>
+                        <th className="pb-1 pr-2 font-normal text-right">Corr.</th>
+                        <th className="pb-1 pr-2 font-normal text-right">WR strong/weak</th>
+                        <th className="pb-1 pr-2 font-normal text-right">PF strong</th>
+                        <th className="pb-1 font-normal text-right">Trend</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.featureValidation.slice(0, 12).map((f) => (
+                        <tr key={f.feature} className="border-b border-surface-border/40">
+                          <td className="py-1 pr-2 text-slate-300">{f.feature}</td>
+                          <td className="py-1 pr-2 text-right font-mono text-accent">{f.importancePct.toFixed(0)}%</td>
+                          <td className={`py-1 pr-2 text-right font-mono ${(f.correlation ?? 0) > 0.05 ? "text-profit" : (f.correlation ?? 0) < -0.05 ? "text-loss" : "text-slate-500"}`}>
+                            {f.correlation?.toFixed(2) ?? "—"}
+                          </td>
+                          <td className="py-1 pr-2 text-right text-slate-400">
+                            {f.strongWinRate?.toFixed(0) ?? "—"}% / {f.weakWinRate?.toFixed(0) ?? "—"}%
+                          </td>
+                          <td className="py-1 pr-2 text-right text-slate-400">{f.strongProfitFactor?.toFixed(2) ?? "—"}</td>
+                          <td
+                            className={`py-1 text-right ${f.drift === "more_useful" ? "text-profit" : f.drift === "less_useful" ? "text-loss" : "text-slate-500"}`}
+                            title={f.driftDetail ?? undefined}
+                          >
+                            {f.drift === "more_useful" ? "↑ gaining" : f.drift === "less_useful" ? "↓ fading" : f.drift === "stable" ? "stable" : "—"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+            <div className="card">
+              <div className="stat-label mb-2">Probability calibration — score → measured win rate</div>
+              {data.calibration.totalTrades < 20 ? (
+                <p className="text-sm text-slate-600">
+                  Needs ≥20 closed trades. Once calibrated, every buy shows its probability of
+                  success from the measured win rate of similar scores.
+                </p>
+              ) : (
+                <table className="w-full text-xs">
+                  <tbody>
+                    {data.calibration.buckets.map((b) => (
+                      <tr key={b.label} className="border-b border-surface-border/40">
+                        <td className="py-1 pr-2 text-slate-300">score {b.label}</td>
+                        <td className="py-1 pr-2 text-right text-slate-500">{b.trades} trades</td>
+                        <td className={`py-1 text-right font-mono ${b.winRatePct >= 50 ? "text-profit" : "text-loss"}`}>
+                          {b.winRatePct.toFixed(0)}%
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
           </div>
 

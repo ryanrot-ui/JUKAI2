@@ -409,6 +409,30 @@ model TradeReview {
   @@index([win])
 }
 
+// Shadow strategy: hypothetical entries the CANDIDATE strategy (recommended
+// weights) would have taken but the live strategy did not. Resolved later by
+// replaying the token's recorded snapshots through the production exit
+// engine, so live vs candidate can be compared on real subsequent data
+// without risking a lamport.
+model ShadowTrade {
+  id      String   @id @default(cuid())
+  at      DateTime @default(now())
+  mint    String
+  tokenId String?
+  strategy String  @default("candidate")
+  entryPriceUsd Float
+  candidateScore Int
+  liveScore      Int
+  resolved  Boolean   @default(false)
+  pnlPct    Float?
+  exitKind  String?
+  closedAt  DateTime?
+
+  @@index([resolved])
+  @@index([at])
+  @@index([mint])
+}
+
 // Every parameter change (manual save, auto-rebalance, applied
 // recommendation) with the previous values, so any change can be reverted.
 model ParameterChange {
