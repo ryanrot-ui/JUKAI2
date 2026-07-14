@@ -24,7 +24,7 @@ export type ExecutionAction = "buy" | "watch" | "ignore";
 
 export interface RuleResult {
   rule: string;
-  layer: "safety" | "opportunity" | "risk";
+  layer: "safety" | "opportunity" | "risk" | "confirmation";
   /** Hard rules can reject; advisory rules only inform (and shape the score). */
   hard: boolean;
   passed: boolean;
@@ -43,6 +43,11 @@ export interface BuyDecision {
   /** 0–100: share of decision inputs that actually had data. */
   confidence: number;
 }
+
+/** Swap fees + priority fee overhead for a round trip, % of position size.
+ *  Used by the cost-vs-target gate: 2×slippage + this must stay under a
+ *  third of the take-profit target or the trade is structurally unprofitable. */
+const FEE_OVERHEAD_PCT = 0.6;
 
 /** Narrative-intelligence scores relevant to the buy decision. */
 export interface NarrativeGateInput {
@@ -204,6 +209,100 @@ export function evaluateBuyRules(
     );
   }
 
+  // Cost-vs-target: expected round-trip cost (slippage in and out + swap
+  // fees) must not consume more than a third of the first profit target —
+  // otherwise the trade needs to be right just to break even.
+  if (m.estSlippagePctFor1Sol !== null) {
+    const roundTripCostPct = 2 * m.estSlippagePctFor1Sol + FEE_OVERHEAD_PCT;
+    add(
+      "safety",
+      true,
+      "cost vs target",
+      roundTripCostPct <= s.takeProfitPct / 3,
+      `round-trip cost ~${roundTripCostPct.toFixed(1)}% (2×slippage + fees) vs take-profit +${s.takeProfitPct}% — cost must stay under a third of the first target`
+    );
+  }
+
+  // ── Layer 1b: CONFIRMATIONS — independent signals that must agree ────────
+  // High-selectivity gate: each confirmation is an independent read on the
+  // setup. Unknown data does NOT confirm (fail-closed — incomplete data is
+  // not conviction). The trade requires `minConfirmations` of the 6.
+  const confirmations: Array<{ name: string; ok: boolean; detail: string }> = [
+    {
+      name: "liquidity & tight spread",
+      ok:
+        m.liquiditySol !== null &&
+        m.liquiditySol >= s.minLiquiditySol &&
+        m.estSlippagePctFor1Sol !== null &&
+        m.estSlippagePctFor1Sol <= 1.5,
+      detail: `${m.liquiditySol?.toFixed(0) ?? "?"} SOL pooled, ~${m.estSlippagePctFor1Sol?.toFixed(1) ?? "?"}% slippage/1 SOL (need ≥${s.minLiquiditySol} SOL and ≤1.5%)`,
+    },
+    {
+      name: "volume rising",
+      ok:
+        m.volume5mUsd !== null &&
+        m.volume5mUsd >= s.minVolume5mUsd &&
+        m.volumeGrowthPct !== null &&
+        m.volumeGrowthPct > 0,
+      detail: `$${m.volume5mUsd?.toFixed(0) ?? "?"} 5m volume, trend ${m.volumeGrowthPct != null ? `${m.volumeGrowthPct >= 0 ? "+" : ""}${m.volumeGrowthPct.toFixed(0)}%` : "unknown"} (must be rising, not fading)`,
+    },
+    {
+      name: "trend alignment",
+      ok: m.priceChange1hPct !== null && m.priceChange1hPct > 0 && m.momentum !== null && m.momentum > 0,
+      detail: `1h ${m.priceChange1hPct != null ? `${m.priceChange1hPct >= 0 ? "+" : ""}${m.priceChange1hPct.toFixed(0)}%` : "?"}, momentum ${m.momentum?.toFixed(2) ?? "?"}%/min (short-term move must align with the larger trend)`,
+    },
+    {
+      name: "clean structure",
+      ok:
+        m.volatility5m !== null &&
+        m.volatility5m <= 12 &&
+        m.momentum !== null &&
+        m.momentum > 0 &&
+        (m.momentumAcceleration === null || m.momentumAcceleration >= -0.5),
+      detail: `volatility ${m.volatility5m?.toFixed(1) ?? "?"}%, momentum ${m.momentum?.toFixed(2) ?? "?"} (choppy/whipsaw price action does not confirm)`,
+    },
+    {
+      name: "real momentum (social/on-chain)",
+      ok:
+        m.artificialVolumeSuspected !== true &&
+        m.washTradingSuspected !== true &&
+        ((narrative != null && narrative.narrativeScore >= 40) ||
+          (m.holderGrowth5m !== null &&
+            m.holderGrowth5m > 0 &&
+            (m.freshWalletPct === null || m.freshWalletPct <= 40))),
+      detail:
+        m.artificialVolumeSuspected === true || m.washTradingSuspected === true
+          ? "volume looks manufactured (wash/artificial) — spam, not momentum"
+          : `narrative ${narrative?.narrativeScore ?? "?"}, holder growth ${m.holderGrowth5m ?? "?"}/5m, fresh wallets ${m.freshWalletPct?.toFixed(0) ?? "?"}% (needs organic demand, not spam)`,
+    },
+    {
+      name: "token risk acceptable",
+      ok:
+        m.mintAuthorityRevoked === true &&
+        m.freezeAuthorityRevoked === true &&
+        score.criticalFlags.length === 0 &&
+        (m.topHolderPct === null || m.topHolderPct <= s.maxWhalePct) &&
+        (m.devWalletPct === null || m.devWalletPct <= s.maxDevPct),
+      detail: `authorities ${m.mintAuthorityRevoked === true && m.freezeAuthorityRevoked === true ? "revoked" : "NOT verified revoked"}, ${score.criticalFlags.length} critical flag(s), top holder ${m.topHolderPct?.toFixed(1) ?? "?"}%, dev ${m.devWalletPct?.toFixed(1) ?? "?"}%`,
+    },
+  ];
+  for (const c of confirmations) {
+    add("confirmation", false, c.name, c.ok, c.detail);
+  }
+  const confirmed = confirmations.filter((c) => c.ok).length;
+  if (s.minConfirmations > 0) {
+    const missing = confirmations.filter((c) => !c.ok).map((c) => c.name);
+    add(
+      "confirmation",
+      true,
+      "signal agreement",
+      confirmed >= s.minConfirmations,
+      confirmed >= s.minConfirmations
+        ? `${confirmed}/6 independent signals confirm (need ${s.minConfirmations})`
+        : `only ${confirmed}/6 independent signals confirm (need ${s.minConfirmations}) — unconfirmed: ${missing.join(", ")}`
+    );
+  }
+
   // ── Layer 2: OPPORTUNITY — score vs threshold ────────────────────────────
   const scoreOk = score.total >= s.confidenceThreshold;
   add(
@@ -297,10 +396,14 @@ export function evaluateBuyRules(
   const confidence = dataConfidence(m);
 
   if (hardFailures.length > 0) {
+    // Insufficient signal agreement alone is "not yet", not "never": the
+    // token stays WATCHed and conviction can build on a later cycle. Any
+    // safety failure still IGNOREs outright.
+    const onlyConfirmations = hardFailures.every((r) => r.layer === "confirmation");
     return {
       buy: false,
-      action: "ignore",
-      reasons: hardFailures.map((r) => r.detail),
+      action: onlyConfirmations ? "watch" : "ignore",
+      reasons: hardFailures.map((r) => `${r.rule}: ${r.detail}`),
       warnings,
       trace,
       confidence,
@@ -318,15 +421,17 @@ export function evaluateBuyRules(
     };
   }
 
+  // Output behaviour: the strongest 2–3 reasons, not a wall of text — the
+  // complete rule-by-rule story is always in `trace`.
   return {
     buy: true,
     action: "buy",
     reasons: [
-      `score ${score.total} ≥ threshold ${s.confidenceThreshold}; all safety gates passed`,
+      `score ${score.total} ≥ ${s.confidenceThreshold} with ${confirmed}/6 independent signals confirming`,
       ...(narrative
         ? [`narrative ${narrative.narrativeScore}, meme ${narrative.memeScore}, rug risk ${narrative.rugRiskScore}`]
         : []),
-      ...score.greenFlags.slice(0, 6).map((f) => f.label.toLowerCase()),
+      ...score.greenFlags.slice(0, narrative ? 1 : 2).map((f) => `${f.label.toLowerCase()} (${f.detail})`),
     ],
     warnings,
     trace,

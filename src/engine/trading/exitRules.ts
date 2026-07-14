@@ -20,6 +20,7 @@ export interface ExitDecision {
   kind:
     | "take_profit"
     | "stop_loss"
+    | "breakeven_stop"
     | "trailing_stop"
     | "time_exit"
     | "rug_exit"
@@ -61,7 +62,7 @@ export function trailDistancePct(s: BotSettings, gainPct: number): number | null
 
 /**
  * Exit evaluation for one open position. Pure and deterministic.
- * Priority: rug exit > stop loss > momentum exits > weak-trade cut >
+ * priority: rug exit > stop loss > breakeven stop > momentum exits > weak cut >
  * trailing stop > take profit > time exit.
  *
  * Philosophy: cut anything that isn't working (weak cut, momentum exits,
@@ -99,9 +100,26 @@ export function evaluateExit(s: BotSettings, p: OpenPositionView): ExitDecision 
     };
   }
 
-  // 3. Momentum exits (scalping): the setup died — leave before the dump,
-  //    win or lose, instead of waiting for the stop loss to catch the fall.
+  // 3. Breakeven stop: once the trade has proven itself (unrealized gain
+  //    reached breakevenAfterPct), the stop moves to entry — a proven winner
+  //    is never allowed to become a loser. The small buffer covers fees.
   const heldMs = (p.now ?? new Date()).getTime() - p.openedAt.getTime();
+  const peakGainForBE = ((p.peakPriceUsd - p.entryPriceUsd) / p.entryPriceUsd) * 100;
+  if (
+    s.breakevenAfterPct !== null &&
+    peakGainForBE >= s.breakevenAfterPct &&
+    pnlPct <= 0.5
+  ) {
+    return {
+      exit: true,
+      kind: "breakeven_stop",
+      portionPct: 100,
+      reason: `breakeven stop: peaked +${peakGainForBE.toFixed(1)}% (proof at +${s.breakevenAfterPct}%) then fell back to ${pnlPct.toFixed(1)}% — a proven winner must not become a loser`,
+    };
+  }
+
+  // 4. Momentum exits (scalping): the setup died — leave before the dump,
+  //    win or lose, instead of waiting for the stop loss to catch the fall.
   if (heldMs >= MOMENTUM_GRACE_MS) {
     if (
       s.exitMinBuySellRatio !== null &&
@@ -136,7 +154,7 @@ export function evaluateExit(s: BotSettings, p: OpenPositionView): ExitDecision 
     }
   }
 
-  // 4. Weak-trade cut: the trade never worked — flat-to-losing after the
+  // 5. Weak-trade cut: the trade never worked — flat-to-losing after the
   //    configured window with buyers no longer in control. Don't hold losers
   //    hoping they recover; the capital belongs in the next setup.
   //    Requires real flow data: missing buy/sell data is neutral, never a
@@ -157,7 +175,7 @@ export function evaluateExit(s: BotSettings, p: OpenPositionView): ExitDecision 
     };
   }
 
-  // 5. Trailing stop (only once in profit, so it never fires before stop
+  // 6. Trailing stop (only once in profit, so it never fires before stop
   //    loss). Adaptive: the trail tightens as the gain grows.
   const peakGainPct = ((p.peakPriceUsd - p.entryPriceUsd) / p.entryPriceUsd) * 100;
   const trail = trailDistancePct(s, peakGainPct);
@@ -173,7 +191,7 @@ export function evaluateExit(s: BotSettings, p: OpenPositionView): ExitDecision 
     }
   }
 
-  // 6. Take profit — adaptive: while buy pressure is still strong the target
+  // 7. Take profit — adaptive: while buy pressure is still strong the target
   //    is deferred and the tightened trailing stop defends the gain (winners
   //    run); a hard cap at 3× the target banks extraordinary spikes anyway.
   if (pnlPct >= s.takeProfitPct) {
@@ -197,7 +215,7 @@ export function evaluateExit(s: BotSettings, p: OpenPositionView): ExitDecision 
     // deferring: trailing stop above is the protection
   }
 
-  // 7. Time-based exit
+  // 8. Time-based exit
   if (s.maxHoldMinutes !== null) {
     const heldMin = heldMs / 60_000;
     if (heldMin >= s.maxHoldMinutes) {

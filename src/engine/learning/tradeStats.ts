@@ -97,6 +97,7 @@ export function classifyExitKind(reason: string | null): string {
   if (!reason) return "unknown";
   const r = reason.toLowerCase();
   if (r.includes("take profit")) return "take_profit";
+  if (r.includes("breakeven")) return "breakeven_stop";
   if (r.includes("stop loss")) return "stop_loss";
   if (r.includes("trailing")) return "trailing_stop";
   if (r.includes("weak position") || r.includes("weak_exit")) return "weak_exit";
