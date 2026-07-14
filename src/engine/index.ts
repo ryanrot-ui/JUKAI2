@@ -14,17 +14,23 @@ import {
   getSolPriceUsd,
   getTokenPriceUsd,
 } from "./analysis/collectors";
-import { scoreToken, DEFAULT_WEIGHTS } from "./analysis/scoring";
+import { scoreToken, DEFAULT_WEIGHTS, type ScoringWeights } from "./analysis/scoring";
 import type { ScoreResult, TokenMetrics } from "./analysis/types";
 import { MigrationScanner, type MigrationEvent } from "./scanner/migrationScanner";
 import { RpcHealthTracker } from "./rpc/health";
 import { generateStrategyReport } from "./learning/reporter";
+import { generateTradeReview, type ReviewInput } from "./learning/review";
+import { buildCalibration, probabilityOfSuccess, type Calibration } from "./learning/featureValidation";
+import { classifyRegime, type RegimeResult } from "./learning/regime";
+import { recordShadowTrade, resolveShadowTrades } from "./learning/shadow";
+import { loadClosedTrades } from "./learning/loadTrades";
 import { dbResilience, isTransientDbError } from "./db/resilience";
 import { evaluateBuyRules } from "./trading/rules";
 import { adjustSizeForConditions, checkPairHistory, checkRisk } from "./trading/riskManager";
 import { evaluateExit } from "./trading/exitRules";
 import { trackExcursions } from "./trading/excursions";
 import { NarrativeEngine, entrySignalsPayload } from "./narrative";
+import { TrendTracker } from "./narrative/trends";
 import { evaluateNarrativeExit } from "./narrative/exit";
 import { DEFAULT_NARRATIVE_WEIGHTS } from "./narrative/types";
 import type { NarrativeReport } from "./narrative/types";
@@ -99,8 +105,10 @@ class TradingEngine {
   private conn = this.makeConnection();
 
   private config = new LiveConfig();
+  private trends = new TrendTracker();
   private narrative = new NarrativeEngine(
-    () => this.config.get().narrativeWeights ?? DEFAULT_NARRATIVE_WEIGHTS
+    () => this.config.get().narrativeWeights ?? DEFAULT_NARRATIVE_WEIGHTS,
+    () => this.trends.narratives
   );
   private lastNarrativeCheck = new Map<string, number>(); // positionId → ts
   private scanner: MigrationScanner;
@@ -116,6 +124,10 @@ class TradingEngine {
   private evalTimer: NodeJS.Timeout | null = null;
   private lastTradeAt: number | null = null;
   private lastRpcLatencyMs: number | null = null;
+  // ── learning state (refreshed periodically from the trade record) ────────
+  private calibration: Calibration | null = null; // P(success) by score bucket
+  private candidateWeights: ScoringWeights | null = null; // shadow strategy
+  private regime: RegimeResult | null = null; // current market regime
 
   constructor() {
     this.scanner = new MigrationScanner(
@@ -202,6 +214,20 @@ class TradingEngine {
     this.timers.push(setInterval(() => void this.publishHealth(), HEALTH_INTERVAL_MS));
     this.timers.push(setInterval(() => void this.archiveOldData(), ARCHIVE_INTERVAL_MS));
     this.timers.push(setInterval(() => void this.stateTick(), 5_000));
+    // Learning loops: market regime (5 min) and calibration/candidate
+    // weights/shadow resolution (10 min). Both no-op while the DB is down.
+    this.timers.push(setInterval(() => void this.computeRegime(), 5 * 60_000));
+    this.timers.push(setInterval(() => void this.refreshLearningState(), 10 * 60_000));
+    // Narrative trend tracking (influencer watchlist / Reddit / DexScreener
+    // boosts) every 10 min; failures degrade to an empty trend list.
+    this.timers.push(
+      setInterval(() => {
+        if (dbResilience.healthy) void this.trends.refresh().catch(() => {});
+      }, 10 * 60_000)
+    );
+    void this.computeRegime();
+    void this.refreshLearningState();
+    if (dbResilience.healthy) void this.trends.refresh().catch(() => {});
     await this.stateTick();
     logger.info("engine", "engine running — scanning for Pump.fun migrations");
   }
@@ -372,6 +398,9 @@ class TradingEngine {
         tokensDetected,
         scannerError: this.scanner.lastPollError,
         settingsLoadedAt: this.config.loadedSettingsUpdatedAtMs,
+        marketRegime: this.regime?.regime ?? null,
+        marketRegimeDetail: this.regime?.detail ?? null,
+        shadowStrategyActive: this.candidateWeights != null,
         ...this.rpcHealth.snapshot(rpcUrl),
         ...dbResilience.snapshot(),
       },
@@ -670,6 +699,42 @@ class TradingEngine {
       }
 
       const decision = evaluateBuyRules(metrics, score, settings, narrativeReport);
+
+      // Confidence engine: the calibrated probability that a trade scored
+      // like this one is profitable, from measured historical win rates.
+      // Recorded in the trace (visible on every decision) and logged on buys.
+      const prob = this.calibration ? probabilityOfSuccess(this.calibration, score.total) : null;
+      decision.trace.push({
+        rule: "success probability",
+        layer: "opportunity",
+        hard: false,
+        passed: true,
+        detail: prob
+          ? `${prob.pct}% (${prob.pct >= 60 ? "high" : prob.pct >= 45 ? "medium" : "low"} confidence) — ${prob.basis}`
+          : "unrated — needs ≥20 closed trades to calibrate",
+      });
+
+      // Shadow strategy: score the same opportunity under the candidate
+      // weights. Divergent entries (candidate buys, live watches) become
+      // hypothetical ShadowTrade rows resolved on real subsequent data.
+      let candidateScore: number | null = null;
+      if (this.candidateWeights) {
+        candidateScore = scoreToken(metrics, this.candidateWeights).total;
+        if (
+          decision.action === "watch" &&
+          candidateScore >= settings.confidenceThreshold &&
+          metrics.priceUsd != null
+        ) {
+          void recordShadowTrade({
+            mint: t.mint,
+            tokenId: t.tokenId,
+            entryPriceUsd: metrics.priceUsd,
+            candidateScore,
+            liveScore: score.total,
+          });
+        }
+      }
+
       // Full rule-by-rule trace + data confidence persisted on every
       // evaluation, so the dashboard can always explain the decision.
       const decisionData = {
@@ -763,6 +828,15 @@ class TradingEngine {
     const symbol = metrics.symbol;
     const entryReason = `score ${score.total}: ${reasons.join("; ")}`;
 
+    // Confidence engine: displayed/logged before every buy.
+    const prob = this.calibration ? probabilityOfSuccess(this.calibration, score.total) : null;
+    if (prob) {
+      logger.info(
+        "scoring",
+        `confidence for ${t.mint.slice(0, 8)}…: probability of success ${prob.pct}% (${prob.pct >= 60 ? "HIGH" : prob.pct >= 45 ? "MEDIUM" : "LOW"}) — top reasons: ${reasons.slice(0, 3).join("; ")}`
+      );
+    }
+
     // Entry snapshot for the learning analytics: per-metric scoring values,
     // the market context the trade was taken in, and full timing telemetry.
     // The optimizer correlates all of it against the realized outcome.
@@ -770,6 +844,8 @@ class TradingEngine {
       ...(narrativeReport
         ? entrySignalsPayload(score.total, narrativeReport)
         : { scannerScore: score.total }),
+      candidateScore: this.candidateWeights ? scoreToken(metrics, this.candidateWeights).total : null,
+      successProbabilityPct: prob?.pct ?? null,
       metrics: Object.fromEntries(score.metrics.map((m) => [m.metric, m.value])),
       context: {
         marketCapUsd: metrics.marketCapUsd,
@@ -780,9 +856,12 @@ class TradingEngine {
         momentumAcceleration: metrics.momentumAcceleration,
         priceChange5mPct: metrics.priceChange5mPct,
         priceChange1hPct: metrics.priceChange1hPct,
+        volatility5m: metrics.volatility5m,
+        estSlippagePctFor1Sol: metrics.estSlippagePctFor1Sol,
         holderCount: metrics.holderCount,
         tokenAgeMin: (Date.now() - t.migratedAt.getTime()) / 60_000,
         detectionToBuyMs: Date.now() - t.detectedAt.getTime(),
+        regime: this.regime?.regime ?? null,
       },
       timing: {
         migrationToDetectionMs: t.detectedAt.getTime() - t.migratedAt.getTime(),
@@ -1221,7 +1300,27 @@ class TradingEngine {
         losses: pnlSol <= 0 ? 1 : 0,
       });
       this.lastTradeAt = Date.now();
-      if (soldAll) void this.maybeGenerateStrategyReport();
+      if (soldAll) {
+        // Post-trade review: every completed trade teaches something —
+        // cause attribution + lesson tags, persisted for the Learning page.
+        void generateTradeReview({
+          positionId: p.id,
+          mint: p.mint,
+          symbol: p.symbol,
+          paper: p.paper,
+          pnlSol: totalPnlSol,
+          pnlPct,
+          holdMinutes: (Date.now() - p.openedAt.getTime()) / 60_000,
+          exitReason: reason,
+          exitKind: kind,
+          maxUnrealizedPnlPct: p.maxUnrealizedPnlPct,
+          maxDrawdownPct: p.maxDrawdownPct,
+          takeProfitPct: settings.takeProfitPct,
+          stopLossPct: settings.stopLossPct,
+          entrySignals: (p.entrySignals ?? null) as ReviewInput["entrySignals"],
+        });
+        void this.maybeGenerateStrategyReport();
+      }
 
       logger.info("executor", `SELL ${p.mint.slice(0, 8)}… ${kind} pnl ${pnlSol.toFixed(4)} SOL (${latencyMs}ms)`, {
         reason,
@@ -1245,6 +1344,85 @@ class TradingEngine {
     } finally {
       this.selling.delete(positionId);
       this.lastNarrativeCheck.delete(positionId);
+    }
+  }
+
+  /**
+   * Learning refresh: rebuild the success-probability calibration from the
+   * closed-trade record, load the optimizer's latest recommended weights as
+   * the shadow CANDIDATE strategy (only when they differ from the live
+   * weights), and resolve pending shadow trades against recorded snapshots.
+   */
+  private async refreshLearningState(): Promise<void> {
+    if (!dbResilience.healthy) return;
+    try {
+      const trades = await loadClosedTrades({ mode: "all", limit: 1000 });
+      this.calibration = buildCalibration(trades);
+
+      const reports = await prisma.strategyReport.findMany({
+        orderBy: { at: "desc" },
+        take: 5,
+        select: { recommendations: true },
+      });
+      const rec = reports
+        .map((r) => (r.recommendations as { recommended?: ScoringWeights } | null)?.recommended)
+        .find((w) => w != null);
+      const live = this.config.get().scoringWeights ?? DEFAULT_WEIGHTS;
+      this.candidateWeights =
+        rec && JSON.stringify(rec) !== JSON.stringify(live) ? rec : null;
+
+      await resolveShadowTrades(this.config.get());
+    } catch (e) {
+      if (isTransientDbError(e)) dbResilience.recordFailure(e);
+      else logger.debug("engine", `learning refresh failed: ${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * Market regime from the scanner's own last hour of data: per-token price
+   * direction, aggregate buy pressure, detection rate, volume. Stamped into
+   * every entry's signals so lessons/win rates become regime-aware.
+   */
+  private async computeRegime(): Promise<void> {
+    if (!dbResilience.healthy) return;
+    try {
+      const since = new Date(Date.now() - 3_600_000);
+      const [snaps, detections] = await Promise.all([
+        prisma.tokenSnapshot.findMany({
+          where: { at: { gte: since } },
+          orderBy: { at: "asc" },
+          select: { tokenId: true, priceUsd: true, buySellRatio: true, volume5mUsd: true },
+          take: 2000,
+        }),
+        prisma.detectedToken.count({ where: { detectedAt: { gte: since } } }),
+      ]);
+      const byToken = new Map<string, number[]>();
+      const ratios: number[] = [];
+      const volumes: number[] = [];
+      for (const s of snaps) {
+        if (s.priceUsd != null) {
+          const arr = byToken.get(s.tokenId) ?? [];
+          arr.push(s.priceUsd);
+          byToken.set(s.tokenId, arr);
+        }
+        if (s.buySellRatio != null) ratios.push(s.buySellRatio);
+        if (s.volume5mUsd != null) volumes.push(s.volume5mUsd);
+      }
+      const tokenChangesPct = [...byToken.values()]
+        .filter((prices) => prices.length >= 2 && prices[0] > 0)
+        .map((prices) => ((prices[prices.length - 1] - prices[0]) / prices[0]) * 100);
+      const prev = this.regime?.regime;
+      this.regime = classifyRegime({
+        tokenChangesPct,
+        avgBuySellRatio: ratios.length ? ratios.reduce((a, b) => a + b, 0) / ratios.length : null,
+        detectionsPerHour: detections,
+        avgVolume5mUsd: volumes.length ? volumes.reduce((a, b) => a + b, 0) / volumes.length : null,
+      });
+      if (prev !== this.regime.regime) {
+        logger.info("engine", `market regime: ${prev ?? "unknown"} → ${this.regime.regime} (${this.regime.detail})`);
+      }
+    } catch (e) {
+      if (isTransientDbError(e)) dbResilience.recordFailure(e);
     }
   }
 
