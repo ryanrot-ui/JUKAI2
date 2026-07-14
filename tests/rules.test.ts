@@ -61,7 +61,13 @@ describe("evaluateBuyRules — three-layer decision", () => {
     const d = evaluateBuyRules(m, scoreToken(m), DEFAULT_SETTINGS);
     expect(d.buy).toBe(false);
     expect(d.action).toBe("watch");
-    expect(d.reasons.some((r) => r.includes("below acceptance threshold"))).toBe(true);
+    // Blocked either by the score threshold or by insufficient signal
+    // agreement — both are "not yet", not "never".
+    expect(
+      d.reasons.some(
+        (r) => r.includes("below acceptance threshold") || /\d\/6 independent signals/.test(r)
+      )
+    ).toBe(true);
   });
 
   it("IGNOREs on frozen transfers (safety gate) even with a perfect score", () => {
@@ -132,7 +138,7 @@ describe("evaluateBuyRules — three-layer decision", () => {
     const d = evaluateBuyRules(m, scoreToken(m), DEFAULT_SETTINGS);
     for (const r of d.trace) {
       expect(typeof r.passed).toBe("boolean");
-      expect(["safety", "opportunity", "risk"]).toContain(r.layer);
+      expect(["safety", "opportunity", "risk", "confirmation"]).toContain(r.layer);
       expect(r.detail.length).toBeGreaterThan(0);
     }
     expect(d.trace.some((r) => r.layer === "safety" && r.hard)).toBe(true);

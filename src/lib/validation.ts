@@ -60,11 +60,13 @@ export const settingsSchema = z.object({
   maxEntryPriceChange5mPct: z.number().min(1).max(10_000).nullable(),
   maxEntryPriceChange1hPct: z.number().min(1).max(100_000).nullable(),
   requireRisingMomentum: z.boolean(),
+  minConfirmations: z.number().int().min(0).max(6),
 
   // Adaptive exits
   letWinnersRun: z.boolean(),
   adaptiveTrailing: z.boolean(),
   cutWeakAfterMinutes: z.number().min(0.5).max(24 * 60).nullable(),
+  breakevenAfterPct: z.number().positive().max(1000).nullable(),
 
   // Learning analytics
   autoRebalanceWeights: z.boolean(),

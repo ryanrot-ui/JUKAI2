@@ -48,6 +48,17 @@ const SECTIONS: Array<{
     title: "Entry timing (anti-chase)",
     fields: [
       {
+        key: "minConfirmations",
+        label: "Required confirmations (0–6)",
+        hint: "independent signals that must agree: liquidity/spread, rising volume, trend, clean structure, real momentum, token risk; 0 = disabled",
+      },
+      {
+        key: "breakevenAfterPct",
+        label: "Breakeven stop after gain (%)",
+        nullable: true,
+        hint: "once up this much, the stop moves to entry — a proven winner never becomes a loser; empty = disabled",
+      },
+      {
         key: "maxEntryPriceChange5mPct",
         label: "Max 5m price change at entry (%)",
         nullable: true,

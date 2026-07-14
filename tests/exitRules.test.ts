@@ -13,6 +13,7 @@ const SWING = {
   maxHoldMinutes: null,
   exitMinBuySellRatio: null,
   exitVolumeFadePct: null,
+  breakevenAfterPct: null,
 };
 
 const base = (heldMinutes = 2): OpenPositionView => ({

@@ -21,7 +21,7 @@ import { RpcHealthTracker } from "./rpc/health";
 import { generateStrategyReport } from "./learning/reporter";
 import { dbResilience, isTransientDbError } from "./db/resilience";
 import { evaluateBuyRules } from "./trading/rules";
-import { checkRisk } from "./trading/riskManager";
+import { adjustSizeForConditions, checkPairHistory, checkRisk } from "./trading/riskManager";
 import { evaluateExit } from "./trading/exitRules";
 import { trackExcursions } from "./trading/excursions";
 import { NarrativeEngine, entrySignalsPayload } from "./narrative";
@@ -115,6 +115,7 @@ class TradingEngine {
   private timers: NodeJS.Timeout[] = [];
   private evalTimer: NodeJS.Timeout | null = null;
   private lastTradeAt: number | null = null;
+  private lastRpcLatencyMs: number | null = null;
 
   constructor() {
     this.scanner = new MigrationScanner(
@@ -330,6 +331,7 @@ class TradingEngine {
       await this.conn.getSlot("confirmed");
       rpcLatencyMs = Date.now() - t0;
       this.rpcFailures = 0;
+      this.lastRpcLatencyMs = rpcLatencyMs; // sizing input: degraded RPC → smaller trades
       this.rpcHealth.recordSuccess(this.rpcUrls[this.rpcIndex], rpcLatencyMs);
     } catch (probeErr) {
       this.rpcFailures++;
@@ -798,6 +800,36 @@ class TradingEngine {
         logger.info("risk", `buy blocked for ${t.mint.slice(0, 8)}…`, { reasons: risk.reasons });
         return null;
       }
+
+      // Pair discipline: no revenge-trading a mint that just lost, and a
+      // pair with 2 consecutive losses is locked for the day.
+      const recentClosed = await prisma.position.findMany({
+        where: { mint: t.mint, status: "CLOSED" },
+        orderBy: { closedAt: "desc" },
+        take: 2,
+        select: { pnlSol: true, closedAt: true },
+      });
+      const pairBlock = checkPairHistory(settings, { recentClosed });
+      if (pairBlock) {
+        logger.info("risk", `buy blocked for ${t.mint.slice(0, 8)}…: ${pairBlock}`);
+        return null;
+      }
+
+      // Condition-aware sizing: adverse execution conditions (volatility,
+      // slippage, RPC latency) shrink the position instead of blocking it.
+      const sized = adjustSizeForConditions(risk.sizeSol, {
+        volatility5m: metrics.volatility5m,
+        estSlippagePctFor1Sol: metrics.estSlippagePctFor1Sol,
+        rpcLatencyMs: this.lastRpcLatencyMs,
+      });
+      if (sized.notes.length > 0) {
+        logger.info(
+          "risk",
+          `reduced size for ${t.mint.slice(0, 8)}…: ${risk.sizeSol} → ${sized.sizeSol.toFixed(4)} SOL`,
+          { notes: sized.notes }
+        );
+      }
+      risk.sizeSol = sized.sizeSol;
 
       // Live-mode pre-trade validation: wallet must actually hold enough SOL
       // (trade size + fee/rent headroom).

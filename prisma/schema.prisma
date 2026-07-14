@@ -84,11 +84,18 @@ model Settings {
   maxEntryPriceChange5mPct Float? @default(35) // reject if price already +this% in 5m
   maxEntryPriceChange1hPct Float? @default(175) // reject if price already +this% in 1h
   requireRisingMomentum    Boolean @default(false) // hard-require accelerating momentum
+  // High-selectivity gate: how many of the 6 independent confirmations
+  // (liquidity/spread, rising volume, trend alignment, clean structure,
+  // real momentum, token risk) must agree before buying. 0 = disabled.
+  minConfirmations Int @default(4)
 
   // Adaptive exits
   letWinnersRun       Boolean @default(true) // defer TP while buy pressure is strong; trail protects
   adaptiveTrailing    Boolean @default(true) // tighten the trail as unrealized profit grows
   cutWeakAfterMinutes Float?  @default(4) // cut flat/losing positions with dead momentum after N min (null = off)
+  // Move the stop to breakeven once unrealized gain reaches this % — a
+  // proven winner is never allowed to become a loser. null = disabled.
+  breakevenAfterPct Float? @default(6)
 
   // Learning analytics: auto-apply the optimizer's recommended scoring
   // weights each time a strategy report is generated.
