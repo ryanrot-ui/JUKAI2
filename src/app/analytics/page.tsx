@@ -86,6 +86,19 @@ interface Analytics {
       rugged: boolean | null;
     }>;
   };
+  smartMoney: {
+    enabled: boolean;
+    wallets: number;
+    gradedEvents: number;
+    topWallets: Array<{
+      address: string;
+      score: number;
+      tokensBought: number;
+      wins: number;
+      rugs: number;
+      avgTokenGainPct: number | null;
+    }>;
+  };
 }
 
 interface BacktestResponse {
@@ -263,6 +276,48 @@ export default function AnalyticsPage() {
                 </div>
               )}
             </div>
+          </div>
+
+          {/* Smart money (Phase 4) */}
+          <div className="card mb-4">
+            <div className="stat-label mb-1">Smart-money wallets — scored against graded token outcomes</div>
+            {!data.smartMoney.enabled ? (
+              <p className="text-sm text-slate-600">
+                Inactive: requires HELIUS_API_KEY. When enabled, early buyers of every detected token
+                are recorded and scored against the token&apos;s graded 24h outcome; ≥2 proven wallets
+                buying adds a small bounded bonus (max +8) — never a gate.
+              </p>
+            ) : data.smartMoney.topWallets.length === 0 ? (
+              <p className="text-sm text-slate-600">
+                Collecting: {data.smartMoney.wallets} wallets seen, {data.smartMoney.gradedEvents} buys graded.
+                Wallets appear here once they have ≥5 graded tokens.
+              </p>
+            ) : (
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-left text-slate-500 border-b border-surface-border">
+                    <th className="pb-1 pr-2 font-normal">Wallet</th>
+                    <th className="pb-1 pr-2 font-normal text-right">Score</th>
+                    <th className="pb-1 pr-2 font-normal text-right">Tokens</th>
+                    <th className="pb-1 pr-2 font-normal text-right">Winners</th>
+                    <th className="pb-1 pr-2 font-normal text-right">Rugs</th>
+                    <th className="pb-1 font-normal text-right">Avg peak</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.smartMoney.topWallets.map((w) => (
+                    <tr key={w.address} className="border-b border-surface-border/40">
+                      <td className="py-1 pr-2 font-mono text-slate-300">{w.address.slice(0, 4)}…{w.address.slice(-4)}</td>
+                      <td className={`py-1 pr-2 text-right font-mono ${w.score >= 65 ? "text-profit" : "text-slate-400"}`}>{w.score}</td>
+                      <td className="py-1 pr-2 text-right text-slate-400">{w.tokensBought}</td>
+                      <td className="py-1 pr-2 text-right text-profit">{w.wins}</td>
+                      <td className="py-1 pr-2 text-right text-loss">{w.rugs}</td>
+                      <td className="py-1 text-right text-slate-400">{w.avgTokenGainPct != null ? `+${w.avgTokenGainPct.toFixed(0)}%` : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
 
           {/* Weight optimizer */}
